@@ -2,9 +2,9 @@
 
 NYC-area live music discovery and, once licensed comparable offer history supports it, personalized ticket buy/wait recommendations.
 
-## Current state — 2026-10-10
+## Current state — 2026-10-13
 
-Phase 0 architecture documentation is established. No product code, live connectors, production resources or validated predictive model exist yet. This README is prepared for the requested private repository `Sweet-Seats`; repository creation and this commit remain pending.
+Phase 0 architecture documentation is established. No product code, live connectors, production resources or validated predictive model exist yet. The `Sweet-Seats` repository and initial README are established. Repository visibility is currently public; the owner authorized changing it to private on 2026-10-13, and that change remains pending verification.
 
 - [Notion project and architecture index](https://app.notion.com/p/3f57ecee36a980dfbc14eb53a52e3d0f)
 - [00 — Product Charter & Phase 0](https://app.notion.com/p/3f57ecee36a981d09ddfcb8d962654a4?pvs=204)
@@ -79,7 +79,7 @@ Candidate thresholds (15% and $25 total-order change in 60 minutes) require back
 
 ## Next iteration
 
-Create the private repository and commit this README; confirm stack/budget, sample artists/venues/catchment and first channel. Implement migrations, typed mappings, adapters and deny-by-default permissions using synthetic fixtures. Obtain detailed-offer terms in parallel. Provision runtime only after resource choices.
+Repository creation and the initial README are complete. Confirm private visibility, stack/budget, sample artists/venues/catchment and first channel. Implement migrations, typed mappings, adapters and deny-by-default permissions using synthetic fixtures. Obtain detailed-offer terms in parallel. Provision runtime only after resource choices.
 
 Recommended future layout (directories do not exist yet): `apps/web`, `services/api`, `jobs`, `db/migrations`, `adapters`, `models`, `tests/fixtures`, `infra`, `docs`.
 
