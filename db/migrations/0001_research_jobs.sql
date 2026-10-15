@@ -1,19 +1,7 @@
--- Proposed (NOT applied). Durable queue + idempotency for Linear research triggers.
--- Requires a Notion decision ID before applying; see docs/linear-research-agent.md.
-create table if not exists research_jobs (
-  id uuid primary key default gen_random_uuid(),
-  linear_issue_id text not null,
-  linear_webhook_id text,
-  preset text not null check (preset in ('low', 'medium')),
-  source text not null check (source in ('webhook', 'sweep', 'manual')),
-  status text not null default 'queued' check (status in ('queued','running','posted','failed','skipped')),
-  attempts int not null default 0,
-  linear_comment_id text,
-  error text,
-  created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
-);
--- One active job per issue; prevents webhook + sweep double-posting.
-create unique index if not exists research_jobs_one_active
-  on research_jobs (linear_issue_id) where status in ('queued', 'running');
-alter table research_jobs enable row level security;  -- service role only; no public policies
+-- WITHDRAWN / NOT APPLIED: superseded by SS-RESEARCH-0.2 contract definitions.
+-- Intentionally contains no DDL. Earlier active-per-issue queue conflated execution
+-- with publication and did not preserve completed-request deduplication.
+-- Future PostgreSQL migration must implement the logical records, cardinalities,
+-- durable leases, exact approvals, expiry, roles and outbox in
+-- docs/contracts/research-v0.2.md after project association is confirmed.
+-- No extension, live schema or production resource change is authorized here.

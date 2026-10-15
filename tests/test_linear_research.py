@@ -1,108 +1,106 @@
-import hashlib, hmac, json, time
-import httpx, pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+"""Offline contract tests. No live integration, authentication or DB claims."""
+import asyncio
+import copy
+import json
+from pathlib import Path
+import unittest
 
-from adapters.linear import LinearClient, verify_webhook
-from adapters.perplexity_research import preset_for_labels, build_prompt
-from jobs import linear_research as jr
-from services.api import linear_webhook as wh
-
-SECRET = "test-secret"
-
-
-def issue(labels):
-    return {"id": "uuid-1", "identifier": "SS-1", "title": "Ticket API terms", "description": "Compare",
-            "url": "https://linear.app/x", "labels": {"nodes": [{"name": n} for n in labels]}}
+from adapters.linear import LinearClient
+from adapters.perplexity_research import run_research
+from jobs.linear_research import process_job, sweep
+from jobs.research_contracts import (ContractError, FOOTER, MARKER, digest, publication_digest,
+                                     select_hourly, timestamp, validate_approval, validate_report,
+                                     validate_request)
+from services.api.linear_webhook import linear_webhook
 
 
-def fake_linear(labels, calls):
-    def handler(req: httpx.Request):
-        body = json.loads(req.content)
-        calls.append(body)
-        q = body["query"]
-        if "commentCreate" in q:
-            return httpx.Response(200, json={"data": {"commentCreate": {"success": True,
-                                  "comment": {"id": "c1", "url": "https://linear.app/c1"}}}})
-        if "issues(" in q:
-            return httpx.Response(200, json={"data": {"issues": {"nodes": [{"id": "a", "identifier": "SS-2"},
-                                                                           {"id": "a", "identifier": "SS-2"}]}}})
-        return httpx.Response(200, json={"data": {"issue": issue(labels)}})
-    return LinearClient("k", transport=httpx.MockTransport(handler))
+class ContractTests(unittest.TestCase):
+    def setUp(self):
+        self.f = json.loads(Path('tests/fixtures/research/hourly.json').read_text())
+        self.r = self.f['candidates'][0]['request']
+        self.a = self.f['approvals'][digest(self.r)]
+        self.p = self.f['policy']
+        self.now = timestamp(self.f['now'])
+
+    def test_approved_request_and_report(self):
+        self.assertTrue(validate_request(self.r, self.a, self.p, self.now))
+        validate_report(self.f['report'], self.r)
+
+    def test_no_approval_or_label_is_not_authority(self):
+        self.assertEqual(select_hourly(self.f['candidates'], {}, set(), self.p, self.now), [])
+
+    def test_brief_or_budget_change_invalidates_approval(self):
+        for field, value in [('brief', 'Changed'), ('budget_cents', 2)]:
+            altered = dict(self.r, **{field: value})
+            with self.assertRaises(ContractError):
+                validate_request(altered, self.a, self.p, self.now)
+
+    def test_scope_and_classification_denied(self):
+        for field, value in [('team_id', 'other'), ('project_id', 'other'),
+                             ('classification', 'private'), ('allowed_use', 'train'), ('mode', 'deep')]:
+            altered = dict(self.r, **{field: value})
+            with self.assertRaises(ContractError):
+                validate_request(altered, self.a, self.p, self.now)
+
+    def test_untrusted_approver_denied(self):
+        with self.assertRaises(ContractError):
+            validate_request(self.r, dict(self.a, actor_id='stranger'), self.p, self.now)
+
+    def test_expired_approval_and_request_denied(self):
+        with self.assertRaises(ContractError):
+            validate_request(self.r, dict(self.a, expires_at='2026-01-01T00:00:00Z'), self.p, self.now)
+        with self.assertRaises(ContractError):
+            validate_request(dict(self.r, expires_at='2026-01-01T00:00:00Z'), self.a, self.p, self.now)
+
+    def test_hourly_repeat_does_not_repeat_completed_request(self):
+        plan = select_hourly(self.f['candidates'], self.f['approvals'], set(), self.p, self.now)
+        self.assertEqual(len(plan), 1)
+        self.assertEqual(select_hourly(self.f['candidates'], self.f['approvals'],
+                                      {plan[0]['key']}, self.p, self.now), [])
+
+    def test_new_revision_requires_new_approval_and_allows_rerun(self):
+        old_key = validate_request(self.r, self.a, self.p, self.now)
+        new = dict(self.r, revision=2)
+        candidate = [{'label': 'research-quick', 'request': new}]
+        self.assertEqual(select_hourly(candidate, self.f['approvals'], {old_key}, self.p, self.now), [])
+        approvals = {digest(new): dict(self.a, digest=digest(new))}
+        self.assertEqual(len(select_hourly(candidate, approvals, {old_key}, self.p, self.now)), 1)
+
+    def test_exact_publication_target_and_body(self):
+        body = MARKER + '\nSynthetic reviewed report\n' + FOOTER
+        target = {'workspace_id': 'demo-workspace', 'issue_id': 'demo-issue'}
+        bound = publication_digest(target, body)
+        approval = dict(self.a, digest=bound)
+        validate_approval(approval, bound, set(self.p['trusted_actors']), self.now)
+        for changed in [publication_digest(dict(target, issue_id='other'), body),
+                        publication_digest(target, body.replace('Synthetic', 'Modified'))]:
+            with self.assertRaises(ContractError):
+                validate_approval(approval, changed, set(self.p['trusted_actors']), self.now)
+
+    def test_report_requires_evidence_lineage(self):
+        report = copy.deepcopy(self.f['report'])
+        report['claims'][0]['evidence_ids'] = ['missing']
+        with self.assertRaises(ContractError):
+            validate_report(report, self.r)
+        report = dict(self.f['report'], allowed_use='features')
+        with self.assertRaises(ContractError):
+            validate_report(report, self.r)
+
+    def test_naive_timestamps_and_boolean_budget_rejected(self):
+        with self.assertRaises(ContractError):
+            timestamp('2026-10-15T12:00:00')
+        with self.assertRaises(ContractError):
+            validate_request(dict(self.r, budget_cents=True), self.a, self.p, self.now)
+
+    def test_all_legacy_network_paths_disabled(self):
+        client = LinearClient()
+        for call in [lambda: run_research('brief', 'low'), lambda: process_job(None, None),
+                     lambda: sweep(None, None), lambda: linear_webhook(None),
+                     lambda: client.add_comment('issue', 'text'), lambda: client.get_issue('issue'),
+                     lambda: client.graphql('query'), lambda: client.open_issues_with_label('research-quick')]:
+            with self.assertRaises(RuntimeError):
+                asyncio.run(call())
 
 
-class FakePplx:
-    seen = []
-    def __init__(self):
-        self.responses = self
-    def create(self, **kw):
-        FakePplx.seen.append(kw)
-        return type("R", (), {"output_text": "REPORT [1]"})()
-
-
-def sign(raw):
-    return hmac.new(SECRET.encode(), raw, hashlib.sha256).hexdigest()
-
-
-def test_verify_webhook_good_bad_and_replay():
-    raw, now = b'{"a":1}', 1_000_000
-    assert verify_webhook(raw, sign(raw), SECRET, now, now_ms=now)
-    assert not verify_webhook(raw, "00" * 32, SECRET, now, now_ms=now)
-    assert not verify_webhook(raw, sign(raw), SECRET, now - 61_000, now_ms=now)
-    assert not verify_webhook(raw, None, SECRET, now, now_ms=now)
-
-
-def test_preset_routing():
-    assert preset_for_labels(["research"]) == "medium"
-    assert preset_for_labels(["research-quick"]) == "low"
-    assert preset_for_labels(["research", "research-quick"]) == "medium"
-    assert preset_for_labels(["bug"]) is None
-
-
-def test_prompt_contains_issue():
-    p = build_prompt(issue(["research"]))
-    assert "SS-1" in p and "Sources" in p
-
-
-async def test_process_job_posts_comment():
-    calls, FakePplx.seen = [], []
-    result = await jr.process_job(jr.ResearchJob("uuid-1", "webhook"), fake_linear(["research"], calls), FakePplx)
-    assert result == "posted"
-    assert FakePplx.seen[0]["preset"] == "medium"
-    comment = calls[-1]["variables"]["input"]
-    assert comment["issueId"] == "uuid-1" and jr.REPORT_MARKER in comment["body"] and "REPORT [1]" in comment["body"]
-
-
-async def test_process_job_skips_unlabeled():
-    calls = []
-    assert await jr.process_job(jr.ResearchJob("uuid-1", "x"), fake_linear(["bug"], calls), FakePplx) == "skipped"
-    assert not any("commentCreate" in c["query"] for c in calls)
-
-
-async def test_sweep_dedupes_and_drain_isolates_failures():
-    q, calls = jr.InMemoryQueue(), []
-    linear = fake_linear(["research-quick"], calls)
-    assert await jr.sweep(q, linear) == 1
-
-    class Boom(FakePplx):
-        def create(self, **kw):
-            raise TimeoutError
-    await q.enqueue(jr.ResearchJob("b", "x"))
-    results = await jr.drain(q, linear, Boom)
-    assert results == ["failed:TimeoutError", "failed:TimeoutError"]
-
-
-def test_webhook_endpoint(monkeypatch):
-    monkeypatch.setenv("LINEAR_WEBHOOK_SECRET", SECRET)
-    wh.queue = jr.InMemoryQueue()
-    app = FastAPI(); app.include_router(wh.router)
-    c = TestClient(app)
-    ev = {"action": "create", "type": "Issue", "webhookTimestamp": int(time.time() * 1000),
-          "data": {"id": "uuid-9", "labels": [{"name": "research"}]}}
-    raw = json.dumps(ev).encode()
-    h = {"Linear-Signature": sign(raw), "Content-Type": "application/json"}
-    assert c.post("/webhooks/linear", content=raw, headers=h).json() == {"status": "queued"}
-    assert c.post("/webhooks/linear", content=raw, headers=h).json() == {"status": "duplicate"}
-    assert c.post("/webhooks/linear", content=raw, headers={"Linear-Signature": "bad"}).status_code == 401
-    ev2 = dict(ev, type="Comment"); raw2 = json.dumps(ev2).encode()
-    assert c.post("/webhooks/linear", content=raw2, headers={"Linear-Signature": sign(raw2)}).json() == {"status": "ignored"}
+if __name__ == '__main__':
+    unittest.main()

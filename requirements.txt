@@ -1,6 +1,2 @@
-httpx>=0.27
-fastapi>=0.110
-perplexityai
-mcp
-pytest
-pytest-asyncio
+# SS-RESEARCH-0.2 offline contract slice uses only Python 3.11+ standard library.
+# Add pinned runtime dependencies only with the verified provider implementation.

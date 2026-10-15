@@ -1,0 +1,15 @@
+{
+  "contract_version": "SS-RESEARCH-0.2",
+  "decision_id": "SS-ADR-007",
+  "enabled": false,
+  "schedule": "0 * * * *",
+  "timezone": "UTC",
+  "candidate_label": "research-quick",
+  "mode": "quick",
+  "max_requests_per_tick": 1,
+  "max_concurrency": 1,
+  "publication": "review_export_only",
+  "paid_execution": false,
+  "missed_ticks": "coalesce; no replay of each missed hour",
+  "production_activation": "blocked pending credentials, explicit limits and durable authenticated runtime"
+}
