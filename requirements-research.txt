@@ -1,0 +1,6 @@
+perplexityai
+httpx
+fastapi
+uvicorn
+mcp
+pytest
