@@ -2,9 +2,9 @@
 
 NYC-area live music discovery and, once licensed comparable offer history supports it, personalized ticket buy/wait recommendations.
 
-## Current state — 2026-10-13
+## Current state — 2026-10-15
 
-Phase 0 architecture documentation is established. No product code, live connectors, production resources or validated predictive model exist yet. The `Sweet-Seats` repository and initial README are established. Repository visibility is currently public; the owner authorized changing it to private on 2026-10-13, and that change remains pending verification.
+Phase 0 architecture documentation is established. Main at `68d08b9a89146271ea67fb7062a6ae450a3dd20e` contains the README; unmerged PRs #1 and #2 contain internal research scaffolds. This branch reconciles PR #2 as an offline contract/selection slice, not a deployed research service or consumer application. GitHub metadata verified private visibility on 2026-10-15. No live connector, validated forecast model or Sweet Seats production deployment was verified in this change. The connected Supabase project association remains unverified; account availability does not establish application deployment.
 
 - [Notion project and architecture index](https://app.notion.com/p/3f57ecee36a980dfbc14eb53a52e3d0f)
 - [00 — Product Charter & Phase 0](https://app.notion.com/p/3f57ecee36a981d09ddfcb8d962654a4?pvs=204)
@@ -31,6 +31,8 @@ Predictive advice is a later gated release. Do not claim unannounced event acces
 | PostgreSQL | Operational canonical records and job/alert state |
 | Object storage | Permitted payloads, dataset manifests and model artifacts |
 | Runtime | Frontend, API, scheduler, workers, inference and delivery |
+| Linear (when activated) | Execution task status; advisory research, no architecture or source-rights authority |
+| Perplexity (when activated) | Internal research execution/evidence; no direct product/model ingestion |
 
 Use internal UUIDs with typed vendor mappings. The SS-DATA-0.1 entity dictionary contains 29 initial entities; it is documentation, not deployed SQL.
 
@@ -44,7 +46,7 @@ These are recommendations, not provisioned resources. Proposed low-volume base i
 
 Planned: permitted MusicBrainz identity fields, Ticketmaster Discovery, curated official monitors, one licensed detailed-offer provider, authorized aggregate inventory, one audience provider and rights-compatible geography/transit.
 
-Every source is disconnected. Unknown permissions deny collection/storage/display/training/testing as applicable. An API key or successful request does not grant indefinite historical retention or predictive-use rights.
+Product sources remain planned/disconnected in the inspected baseline. Internal research activation is separately gated by SS-ADR-007; no provider connection is activated by this branch. Unknown permissions deny collection/storage/display/training/testing as applicable. An API key or successful request does not grant indefinite historical retention or predictive-use rights.
 
 Detailed offer access with retained-history and modeling rights is the pricing release's critical dependency.
 
@@ -79,9 +81,9 @@ Candidate thresholds (15% and $25 total-order change in 60 minutes) require back
 
 ## Next iteration
 
-Repository creation and the initial README are complete. Confirm private visibility, stack/budget, sample artists/venues/catchment and first channel. Implement migrations, typed mappings, adapters and deny-by-default permissions using synthetic fixtures. Obtain detailed-offer terms in parallel. Provision runtime only after resource choices.
+Repository creation and the initial README are complete. Private visibility is verified. Confirm stack/budget, sample artists/venues/catchment and first channel. Implement migrations, typed mappings, adapters and deny-by-default permissions using synthetic fixtures. Obtain detailed-offer terms in parallel. Provision runtime only after resource choices.
 
-Recommended future layout (directories do not exist yet): `apps/web`, `services/api`, `jobs`, `db/migrations`, `adapters`, `models`, `tests/fixtures`, `infra`, `docs`.
+Recommended product layout (this branch contains only an internal research contract slice in some of these directories): `apps/web`, `services/api`, `jobs`, `db/migrations`, `adapters`, `models`, `tests/fixtures`, `infra`, `docs`.
 
 Reference Notion decision IDs in pull requests. Keep credentials, private user records, licensed payloads and trained artifacts out of Git. Publish no open-source license until the owner decides.
 
@@ -89,3 +91,16 @@ Reference Notion decision IDs in pull requests. Keep credentials, private user r
 
 Budget; precise catchment and first sample; PWA confirmation; notification vendor/channel; detailed-offer source and contract; audience vendor; retention durations; evaluation/promotion thresholds; price-alert thresholds; accounts and restoration targets.
 
+
+## Internal research amendment — SS-ADR-007
+
+[Contract SS-RESEARCH-0.2](docs/contracts/research-v0.2.md) is the single reconciliation of the earlier standards. Target: hourly scan of approved `research-quick` requests; reviewed report export only. Configuration is disabled; no scheduler, paid calls, webhook receiver, live migration or automatic Linear comment is activated. Labels do not authorize spending or publication. PR #2 is the reconciliation path; PR #1 is a historical alternative, not another contract to merge.
+
+Offline demonstration (Python 3.11+, standard library only):
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 -m jobs.linear_research --fixture tests/fixtures/research/hourly.json
+```
+
+See [architecture reconciliation](docs/linear-research-agent.md) for verified branch facts, deferred integrations, source boundaries and activation gates. Discovery remains the first consumer milestone.

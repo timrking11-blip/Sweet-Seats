@@ -1,0 +1,67 @@
+{
+  "now": "2026-10-15T20:00:00Z",
+  "policy": {
+    "allowed_teams": [
+      "demo-team"
+    ],
+    "allowed_projects": [
+      "demo-project"
+    ],
+    "trusted_actors": [
+      "demo-owner"
+    ],
+    "max_budget_cents": 1,
+    "max_timeout_seconds": 60
+  },
+  "candidates": [
+    {
+      "label": "research-quick",
+      "request": {
+        "version": "SS-RESEARCH-0.2",
+        "team_id": "demo-team",
+        "project_id": "demo-project",
+        "issue_id": "demo-issue",
+        "request_id": "b6d64962-f74d-43e0-9abb-e16acbe87965",
+        "revision": 1,
+        "mode": "quick",
+        "brief": "SYNTHETIC ONLY: Compare detailed-offer providers; list unknown retention and modeling rights. No external research requested.",
+        "classification": "public",
+        "allowed_use": "internal_research",
+        "budget_cents": 1,
+        "timeout_seconds": 60,
+        "expires_at": "2026-10-16T20:00:00Z",
+        "retention_until": "2026-10-16T20:00:00Z"
+      }
+    }
+  ],
+  "approvals": {
+    "29a753db78ce478c2a0df0424fbb282aeb0dec250ebdf55f296b883633b612c8": {
+      "approval_id": "synthetic-approval",
+      "actor_id": "demo-owner",
+      "digest": "29a753db78ce478c2a0df0424fbb282aeb0dec250ebdf55f296b883633b612c8",
+      "expires_at": "2026-10-16T20:00:00Z"
+    }
+  },
+  "completed": [],
+  "report": {
+    "request_digest": "29a753db78ce478c2a0df0424fbb282aeb0dec250ebdf55f296b883633b612c8",
+    "allowed_use": "internal_research",
+    "evidence": [
+      {
+        "id": "e1",
+        "url": "https://example.com/synthetic",
+        "retrieved_at": "2026-10-15T20:00:00Z",
+        "synthetic": true
+      }
+    ],
+    "claims": [
+      {
+        "kind": "unknown",
+        "text": "Provider rights not verified. This is synthetic evidence metadata.",
+        "evidence_ids": [
+          "e1"
+        ]
+      }
+    ]
+  }
+}
