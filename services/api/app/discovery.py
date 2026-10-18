@@ -111,13 +111,22 @@ def normalize(record: dict, source: dict, identities: dict) -> dict:
         _demo_url(record["ticket_url"])
     if not isinstance(record["performers"], list) or not record["performers"]:
         raise DiscoveryError("invalid_venue_or_credits")
+    credit_keys = set()
     for credit in record["performers"]:
         if not isinstance(credit, dict) or set(credit) != {"vendor_artist_id", "role", "billing_order"}:
             raise DiscoveryError("unexpected_credit_fields")
-        _text(credit["vendor_artist_id"])
+        vendor_artist_id = _text(credit["vendor_artist_id"])
         if (credit["role"] not in {"headliner", "support", "performer"}
                 or type(credit["billing_order"]) is not int or credit["billing_order"] < 0):
             raise DiscoveryError("invalid_credit")
+        if vendor_artist_id in source["artist_mappings"]:
+            artist_key = ("mapped", identifier(source["artist_mappings"][vendor_artist_id]))
+        else:
+            artist_key = ("vendor", vendor_artist_id)
+        credit_key = (*artist_key, credit["role"])
+        if credit_key in credit_keys:
+            raise DiscoveryError("duplicate_performer_credit")
+        credit_keys.add(credit_key)
     try:
         venue_id = source["venue_mappings"][record["venue_vendor_id"]]
         venue = identities["venues"][identifier(venue_id)]
@@ -397,7 +406,8 @@ class FixtureStore:
             status = "partial" if events else "unavailable"
         elif not events and review_count:
             status = "review_required"
-        elif not events and (state["records"] or any(r["status"] == "skipped" for r in runs)):
+        elif not events and (state["records"] or state.get("unresolved")
+                             or any(r["status"] == "skipped" for r in runs)):
             status = "blocked"
         return {"mode": "synthetic", "status": status, "generated_at": now.isoformat(),
                 "freshness_rule": "Demo only: stale after 24 hours; not a production SLA.",
@@ -423,4 +433,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

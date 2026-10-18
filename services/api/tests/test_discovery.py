@@ -3,7 +3,9 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from app.discovery import FixtureStore
+import pytest
+
+from app.discovery import DiscoveryError, FixtureStore
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURE = ROOT / "tests" / "fixtures" / "discovery" / "nyc.json"
@@ -42,3 +44,34 @@ def test_display_permission_fails_closed_without_removing_audit_history(tmp_path
     assert feed["events"] == []
     assert feed["status"] == "blocked"
 
+
+def test_duplicate_mapped_credit_is_rejected_before_unresolved_identity(tmp_path: Path) -> None:
+    data = fixture()
+    source = data["sources"][0]
+    source["artist_mappings"]["Violet Static alias"] = source["artist_mappings"]["Violet Static"]
+    record = data["batches"][0]["records"][0]
+    headliner = record["performers"][0]
+    record["performers"] = [
+        headliner,
+        {**headliner, "vendor_artist_id": "Violet Static alias", "billing_order": 1},
+        {"vendor_artist_id": "unmapped-support", "role": "support", "billing_order": 2},
+    ]
+    store = FixtureStore(tmp_path / "discovery.json")
+
+    with pytest.raises(DiscoveryError, match="duplicate_performer_credit"):
+        store.seed(data, NOW)
+
+
+def test_permission_withheld_unresolved_only_feed_is_blocked(tmp_path: Path) -> None:
+    data = fixture()
+    for source in data["sources"]:
+        source["artist_mappings"] = {}
+        source["permission"]["uses"]["display"] = False
+    store = FixtureStore(tmp_path / "discovery.json")
+
+    store.seed(data, NOW)
+    feed = store.feed(NOW)
+
+    assert feed["events"] == []
+    assert feed["unresolved"] == []
+    assert feed["status"] == "blocked"
