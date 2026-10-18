@@ -79,6 +79,8 @@ class PostgresStore:
         if marker is None and not unseeded:
             raise DiscoveryError("store_not_seeded")
         state = empty_state()
+        if marker is not None:
+            state["unresolved"] = marker["unresolved_observations"]
         for row in conn.execute("SELECT * FROM sources WHERE discovery_metadata IS NOT NULL"):
             source = row["discovery_metadata"]
             sid = str(row["source_id"])
@@ -339,5 +341,9 @@ class PostgresStore:
                     (rid, p["artist_id"], p["role"], p["billing_order"]),
                 )
         conn.execute(
-            "INSERT INTO discovery_state VALUES (true,'SS-DISCOVERY-DEMO-0.1',true) ON CONFLICT DO NOTHING"
+            """INSERT INTO discovery_state(singleton,version,synthetic,unresolved_observations)
+               VALUES (true,'SS-DISCOVERY-DEMO-0.1',true,%s)
+               ON CONFLICT(singleton) DO UPDATE
+               SET unresolved_observations=excluded.unresolved_observations""",
+            (Jsonb(state.get("unresolved", {})),),
         )
