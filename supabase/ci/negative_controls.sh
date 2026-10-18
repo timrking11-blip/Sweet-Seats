@@ -12,6 +12,7 @@
 set -uo pipefail
 
 ROLES=supabase/ci/emulate_supabase_roles.sql
+AUTH=supabase/ci/emulate_supabase_auth.sql
 PERMISSIONS_TEST=supabase/tests/source_permissions_test.sql
 RLS_TEST=supabase/tests/rls_denial_test.sql
 mapfile -t MIGRATIONS < <(ls supabase/migrations/*.sql | sort)
@@ -33,6 +34,7 @@ run_control() {
 
   {
     if [ "$roles" = yes ]; then cat "$ROLES"; echo; fi
+    cat "$AUTH"; echo
     for f in "${MIGRATIONS[@]}"; do
       if [ -n "$migration_sed" ]; then sed "$migration_sed" "$f"; else cat "$f"; fi
       echo
@@ -118,6 +120,21 @@ run_control "expiry boundary made inclusive" \
 run_control "approval evidence no longer required" \
   "FAIL empty evidence is denied" "$PERMISSIONS_TEST" \
   "" yes "/btrim(permission.evidence_note) <> ''/d"
+
+# Phase 2 user isolation and the first-party record rule.
+USER_TEST=supabase/tests/user_isolation_test.sql
+
+run_control "follows readable by every signed-in user" \
+  "FAIL user A reads 2 artist_follows rows" "$USER_TEST" \
+  "create policy leak on public.artist_follows for select to authenticated using (true);"
+
+run_control "insert check no longer tied to the signed-in user" \
+  "FAIL user A inserted a follow for user B" "$USER_TEST" \
+  "" yes "s/  with check (user_id = (select auth.uid()));/  with check (true);/"
+
+run_control "provider value column added to a user table" \
+  "FAIL user tables have unreviewed columns: artist_follows.last_seen_price_minor" "$USER_TEST" \
+  "alter table public.artist_follows add column last_seen_price_minor integer;"
 
 echo "${count} negative controls, ${failures} not caught"
 [ "$failures" -eq 0 ]

@@ -63,7 +63,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Emulate Supabase API roles
-        run: psql -v ON_ERROR_STOP=1 -q -f supabase/ci/emulate_supabase_roles.sql
+        run: |
+          psql -v ON_ERROR_STOP=1 -q -f supabase/ci/emulate_supabase_roles.sql
+          psql -v ON_ERROR_STOP=1 -q -f supabase/ci/emulate_supabase_auth.sql
       - name: Apply migrations
         run: |
           for f in $(ls supabase/migrations/*.sql | sort); do

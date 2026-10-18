@@ -34,6 +34,7 @@ def pg_store():
     try:
         with store._connect() as conn:
             conn.execute((root / "supabase/ci/emulate_supabase_roles.sql").read_text())
+            conn.execute((root / "supabase/ci/emulate_supabase_auth.sql").read_text())
             for path in sorted((root / "supabase/migrations").glob("*.sql")):
                 conn.execute(path.read_text())
         yield store, json.loads(DEFAULT_FIXTURE.read_text())
