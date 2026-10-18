@@ -2,9 +2,9 @@
 
 NYC-area live music discovery and, once licensed comparable offer history supports it, personalized ticket buy/wait recommendations.
 
-## Current state — 2026-10-15
+## Current state — 2026-10-18
 
-Phase 0 architecture documentation is established. Main at `68d08b9a89146271ea67fb7062a6ae450a3dd20e` contains the README; unmerged PRs #1 and #2 contain internal research scaffolds. This branch reconciles PR #2 as an offline contract/selection slice, not a deployed research service or consumer application. GitHub metadata verified private visibility on 2026-10-15. No live connector, validated forecast model or Sweet Seats production deployment was verified in this change. The connected Supabase project association remains unverified; account availability does not establish application deployment.
+The repository is private. Main at `e28959e77408fbab397347e0d16614de80d59971` includes the merged SS-RESEARCH-0.2 offline contract; its provider calls, scheduler, webhook and publication path remain disabled. The discovery foundation is now proposed in a separate PR: a synthetic-data PWA, local FastAPI discovery contract, Supabase migration ledger and CI checks. None is deployed; the migration is not applied; no product provider, validated forecast model, paid research execution or notification delivery is active.
 
 - [Notion project and architecture index](https://app.notion.com/p/3f57ecee36a980dfbc14eb53a52e3d0f)
 - [00 — Product Charter & Phase 0](https://app.notion.com/p/3f57ecee36a981d09ddfcb8d962654a4?pvs=204)
@@ -38,7 +38,7 @@ Use internal UUIDs with typed vendor mappings. The SS-DATA-0.1 entity dictionary
 
 ## Proposed technology
 
-React/TypeScript PWA; Python FastAPI and jobs; Supabase PostgreSQL/Auth; Cloudflare R2 private S3-compatible storage (Supabase Storage is an initial simplification option); Render static hosting, API, background worker, cron dispatcher and separate training job.
+Next.js/TypeScript PWA; Vercel frontend hosting; Python FastAPI and workers on Render; Supabase PostgreSQL/Auth; Cloudflare R2 private S3-compatible storage when its permission gate opens.
 
 These are recommendations, not provisioned resources. Proposed low-volume base infrastructure estimate: about $41/month before licensed data, training overages, storage/notifications/domain and extra environments. Recheck provider pricing before provisioning.
 
@@ -81,9 +81,9 @@ Candidate thresholds (15% and $25 total-order change in 60 minutes) require back
 
 ## Next iteration
 
-Repository creation and the initial README are complete. Private visibility is verified. Confirm stack/budget, sample artists/venues/catchment and first channel. Implement migrations, typed mappings, adapters and deny-by-default permissions using synthetic fixtures. Obtain detailed-offer terms in parallel. Provision runtime only after resource choices.
+The selected stack is Next.js/TypeScript PWA on Vercel, Supabase PostgreSQL/Auth, Render API/workers, and Cloudflare R2 when its storage gate opens. Review the discovery-foundation PR and CI evidence; then confirm the first artist/venue sample, NYC catchment and notification channel. Provider activation and runtime provisioning remain separate owner approvals.
 
-Recommended product layout (this branch contains only an internal research contract slice in some of these directories): `apps/web`, `services/api`, `jobs`, `db/migrations`, `adapters`, `models`, `tests/fixtures`, `infra`, `docs`.
+Current product layout: `apps/web`, `services/api`, `supabase/migrations`, `tests/fixtures`, `jobs`, `adapters` and `docs`. Future delivery adds provider adapters, durable jobs, model evaluation and infrastructure manifests only as their gates open.
 
 Reference Notion decision IDs in pull requests. Keep credentials, private user records, licensed payloads and trained artifacts out of Git. Publish no open-source license until the owner decides.
 
@@ -94,7 +94,7 @@ Budget; precise catchment and first sample; PWA confirmation; notification vendo
 
 ## Internal research amendment — SS-ADR-007
 
-[Contract SS-RESEARCH-0.2](docs/contracts/research-v0.2.md) is the single reconciliation of the earlier standards. Target: hourly scan of approved `research-quick` requests; reviewed report export only. Configuration is disabled; no scheduler, paid calls, webhook receiver, live migration or automatic Linear comment is activated. Labels do not authorize spending or publication. PR #2 is the reconciliation path; PR #1 is a historical alternative, not another contract to merge.
+[Contract SS-RESEARCH-0.2](docs/contracts/research-v0.2.md) is the single reconciliation of the earlier standards. Target: hourly scan of approved `research-quick` requests; reviewed report export only. Configuration is disabled; no scheduler, paid calls, webhook receiver, live migration or automatic Linear comment is activated. Labels do not authorize spending or publication. PR #2 is the merged reconciliation path; PR #1 is a historical alternative, not another contract to merge.
 
 Offline demonstration (Python 3.11+, standard library only):
 

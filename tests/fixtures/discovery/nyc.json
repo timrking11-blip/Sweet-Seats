@@ -1,0 +1,211 @@
+{
+  "version": "SS-DISCOVERY-DEMO-0.1",
+  "synthetic": true,
+  "identities": {
+    "artists": {
+      "13e6cc91-d9fb-5923-ab60-440f8514165b": {
+        "name": "Violet Static"
+      },
+      "bb179a80-e9ae-5d64-96fb-fb38683dbf17": {
+        "name": "June Arcade"
+      },
+      "6783dc1d-23ac-5289-835d-bd846df0c963": {
+        "name": "Northbound Echo"
+      }
+    },
+    "venues": {
+      "66353531-8fe3-566f-ab0e-a63913015907": {
+        "name": "The Lantern Room",
+        "neighborhood": "Brooklyn",
+        "timezone": "America/New_York"
+      },
+      "dc4052ab-737a-5618-9b06-6b462b43b05c": {
+        "name": "Mercury Loft",
+        "neighborhood": "Manhattan",
+        "timezone": "America/New_York"
+      },
+      "f36d1d26-cf06-54e3-8327-be61d06b756e": {
+        "name": "Harbor Stage",
+        "neighborhood": "Jersey City",
+        "timezone": "America/New_York"
+      }
+    }
+  },
+  "sources": [
+    {
+      "source_id": "0e8fba34-a378-5f72-a795-2c6638d4c30d",
+      "name": "Synthetic artist calendar",
+      "kind": "synthetic",
+      "access_status": "approved",
+      "adapter_version": "fixture-0.1",
+      "artist_mappings": {
+        "Violet Static": "13e6cc91-d9fb-5923-ab60-440f8514165b",
+        "June Arcade": "bb179a80-e9ae-5d64-96fb-fb38683dbf17",
+        "Northbound Echo": "6783dc1d-23ac-5289-835d-bd846df0c963"
+      },
+      "venue_mappings": {
+        "The Lantern Room": "66353531-8fe3-566f-ab0e-a63913015907",
+        "Mercury Loft": "dc4052ab-737a-5618-9b06-6b462b43b05c",
+        "Harbor Stage": "f36d1d26-cf06-54e3-8327-be61d06b756e"
+      },
+      "permission": {
+        "permission_id": "0d726288-9cbf-571e-8a2a-f6cd51f357f1",
+        "terms_version": "synthetic-only-0.1",
+        "evidence_ref": "First-party invented fixtures; no provider license represented.",
+        "approved_at": "2026-01-01T00:00:00Z",
+        "expires_at": "2030-01-01T00:00:00Z",
+        "revoked_at": null,
+        "uses": {
+          "collect": true,
+          "display": true,
+          "raw_retention": true,
+          "derived_retention": true,
+          "feature": false,
+          "train": false,
+          "test": true
+        }
+      }
+    },
+    {
+      "source_id": "2c5879c3-19e1-52c2-9c4c-f3aeaedaf27c",
+      "name": "Synthetic venue calendar",
+      "kind": "synthetic",
+      "access_status": "approved",
+      "adapter_version": "fixture-0.1",
+      "artist_mappings": {
+        "Violet Static": "13e6cc91-d9fb-5923-ab60-440f8514165b",
+        "June Arcade": "bb179a80-e9ae-5d64-96fb-fb38683dbf17",
+        "Northbound Echo": "6783dc1d-23ac-5289-835d-bd846df0c963"
+      },
+      "venue_mappings": {
+        "The Lantern Room": "66353531-8fe3-566f-ab0e-a63913015907",
+        "Mercury Loft": "dc4052ab-737a-5618-9b06-6b462b43b05c",
+        "Harbor Stage": "f36d1d26-cf06-54e3-8327-be61d06b756e"
+      },
+      "permission": {
+        "permission_id": "6cf149e4-92e4-5e8c-9aa0-7f325a981ce1",
+        "terms_version": "synthetic-only-0.1",
+        "evidence_ref": "First-party invented fixtures; no provider license represented.",
+        "approved_at": "2026-01-01T00:00:00Z",
+        "expires_at": "2030-01-01T00:00:00Z",
+        "revoked_at": null,
+        "uses": {
+          "collect": true,
+          "display": true,
+          "raw_retention": true,
+          "derived_retention": true,
+          "feature": false,
+          "train": false,
+          "test": true
+        }
+      }
+    }
+  ],
+  "batches": [
+    {
+      "source_id": "0e8fba34-a378-5f72-a795-2c6638d4c30d",
+      "logical_key": "demo-artist-20261018",
+      "outcome": "succeeded",
+      "records": [
+        {
+          "vendor_event_id": "artist-101",
+          "title": "Violet Static + June Arcade",
+          "venue_vendor_id": "The Lantern Room",
+          "performers": [
+            {
+              "vendor_artist_id": "Violet Static",
+              "role": "headliner",
+              "billing_order": 0
+            },
+            {
+              "vendor_artist_id": "June Arcade",
+              "role": "support",
+              "billing_order": 1
+            }
+          ],
+          "starts_at": "2026-11-07T01:00:00Z",
+          "local_date": "2026-11-06",
+          "timezone": "America/New_York",
+          "status": "scheduled",
+          "observed_at": "2026-10-18T06:50:00Z",
+          "available_at": "2026-10-18T06:50:00Z",
+          "source_url": "https://calendar.sweet-seats.invalid/events/artist-101",
+          "ticket_url": null
+        },
+        {
+          "vendor_event_id": "artist-102",
+          "title": "Northbound Echo",
+          "venue_vendor_id": "Mercury Loft",
+          "performers": [
+            {
+              "vendor_artist_id": "Northbound Echo",
+              "role": "headliner",
+              "billing_order": 0
+            }
+          ],
+          "starts_at": null,
+          "local_date": "2026-11-13",
+          "timezone": "America/New_York",
+          "status": "scheduled",
+          "observed_at": "2026-10-16T06:50:00Z",
+          "available_at": "2026-10-16T06:50:00Z",
+          "source_url": "https://calendar.sweet-seats.invalid/events/artist-102",
+          "ticket_url": null
+        }
+      ]
+    },
+    {
+      "source_id": "2c5879c3-19e1-52c2-9c4c-f3aeaedaf27c",
+      "logical_key": "demo-venue-20261018",
+      "outcome": "succeeded",
+      "records": [
+        {
+          "vendor_event_id": "venue-202",
+          "title": "Violet Static + June Arcade",
+          "venue_vendor_id": "The Lantern Room",
+          "performers": [
+            {
+              "vendor_artist_id": "Violet Static",
+              "role": "headliner",
+              "billing_order": 0
+            },
+            {
+              "vendor_artist_id": "June Arcade",
+              "role": "support",
+              "billing_order": 1
+            }
+          ],
+          "starts_at": "2026-11-07T01:00:00Z",
+          "local_date": "2026-11-06",
+          "timezone": "America/New_York",
+          "status": "scheduled",
+          "observed_at": "2026-10-18T06:50:00Z",
+          "available_at": "2026-10-18T06:50:00Z",
+          "source_url": "https://calendar.sweet-seats.invalid/events/venue-202",
+          "ticket_url": null
+        },
+        {
+          "vendor_event_id": "venue-203",
+          "title": "June Arcade",
+          "venue_vendor_id": "Harbor Stage",
+          "performers": [
+            {
+              "vendor_artist_id": "June Arcade",
+              "role": "headliner",
+              "billing_order": 0
+            }
+          ],
+          "starts_at": "2026-11-22T00:30:00Z",
+          "local_date": "2026-11-21",
+          "timezone": "America/New_York",
+          "status": "cancelled",
+          "observed_at": "2026-10-18T06:50:00Z",
+          "available_at": "2026-10-18T06:50:00Z",
+          "source_url": "https://calendar.sweet-seats.invalid/events/venue-203",
+          "ticket_url": null
+        }
+      ]
+    }
+  ]
+}
+
