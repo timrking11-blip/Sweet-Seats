@@ -54,7 +54,7 @@ Nothing in this change activates the provider. Activation requires all of the fo
 
 1. Owner approval recorded as a SourcePermission: terms URL and version, evidence, `approved_at`, `expires_at`, and explicit per-use grants. Candidate uses are not grants.
 2. `access_status` moved to `approved` or `active` in the canonical `sources` table, not only in the Python registry.
-3. A decision on derived retention, and on any raw retention (the current expectation is none), plus a 24-hour removal runbook.
+3. A decision on derived retention, and on any raw retention (the current expectation is none), plus a 24-hour removal runbook. Storage and display gate on `collect`/`display` plus `derived_retention`, so Ticketmaster events become displayable only once derived retention is granted. Normalized records are still Event Content under the terms: the grant needs a retention period ("reasonable periods") and a purge, which do not exist yet.
 4. Attribution and display review against the terms.
 5. `SWEET_SEATS_TICKETMASTER_ENABLED=true` and a server-only `TICKETMASTER_API_KEY` set in the deployment environment. Never commit the key.
 

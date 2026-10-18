@@ -156,7 +156,6 @@ def test_unknown_venue_review_item_persists_and_resolves_like_fixture_store(pg_s
     "field,value",
     [
         ("display_allowed", False),
-        ("raw_retention_allowed", False),
         ("derived_retention_allowed", False),
         ("revoked_at", "2026-10-18T06:00:00Z"),
         ("expires_at", "2026-10-18T07:00:00Z"),
@@ -174,7 +173,20 @@ def test_database_permission_changes_hide_events_immediately(pg_store, field, va
     assert store.feed(NOW)["events"] == []
 
 
-@pytest.mark.parametrize("use", ["collect", "raw_retention", "derived_retention"])
+def test_raw_retention_is_not_required_to_store_or_display(pg_store):
+    # Only normalized records and a payload hash are stored, so raw_retention false
+    # (the Ticketmaster expectation) must not hide events. Derived retention does.
+    store, fixture = pg_store
+    for source in fixture["sources"]:
+        source["permission"]["uses"]["raw_retention"] = False
+    store.seed(fixture, NOW)
+    assert len(store.feed(NOW)["events"]) == 3
+    with store._connect() as conn:
+        conn.execute("UPDATE source_permissions SET derived_retention_allowed=false")
+    assert store.feed(NOW)["events"] == []
+
+
+@pytest.mark.parametrize("use", ["collect", "derived_retention"])
 def test_unknown_ingestion_rights_store_no_observations(pg_store, use):
     store, fixture = pg_store
     for source in fixture["sources"]:

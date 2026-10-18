@@ -62,19 +62,19 @@ def test_duplicate_mapped_credit_is_rejected_before_unresolved_identity(tmp_path
         store.seed(data, NOW)
 
 
-def test_unmapped_venue_is_rejected_without_partial_write(tmp_path: Path) -> None:
+def test_unmapped_venue_is_sent_to_review_not_rejected(tmp_path: Path) -> None:
+    data = fixture()
+    data["batches"][-1]["records"][-1]["venue_vendor_id"] = "missing"
     store = FixtureStore(tmp_path / "discovery.json")
-    store.seed(fixture(), NOW)
-    before = store.read()
-    broken = fixture()
-    for batch in broken["batches"]:
-        batch["logical_key"] += "-new"
-    broken["batches"][-1]["records"][-1]["venue_vendor_id"] = "missing"
 
-    with pytest.raises(DiscoveryError, match="unresolved_venue_identity"):
-        store.seed(broken, NOW)
+    state = store.seed(data, NOW)
+    feed = store.feed(NOW)
 
-    assert store.read() == before
+    assert len(state["records"]) == 3
+    assert [u["reason"] for u in feed["unresolved"]] == ["unresolved_venue_identity"]
+    assert feed["review_count"] == 1
+    # No canonical event is created for it, and no venue is guessed by name.
+    assert len(feed["events"]) == 2
 
 
 def test_permission_withheld_unresolved_only_feed_is_blocked(tmp_path: Path) -> None:

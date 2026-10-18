@@ -22,6 +22,14 @@ DEFAULT_STORE = ROOT / ".local" / "discovery.json"
 DEFAULT_FIXTURE = ROOT / "tests" / "fixtures" / "discovery" / "nyc.json"
 NAMESPACE = UUID("8b4205ed-5ed2-4956-980a-85191120abe1")
 USES = {"collect", "display", "raw_retention", "derived_retention", "feature", "train", "test"}
+# Stored observations are normalized records plus a payload hash; no raw provider
+# payload is kept, so storage and display gate on derived retention. raw_retention
+# stays a separate use for any future path that keeps the payload itself.
+STORE_USES = ("collect", "derived_retention")
+DISPLAY_USES = ("display", "derived_retention")
+# A valid observation whose venue or artist has no reviewed crosswalk is kept for
+# review, never rejected and never matched by name (contract: retained in unresolved).
+UNRESOLVED_IDENTITY = {"unresolved_venue_identity", "unresolved_typed_identity"}
 
 
 class DiscoveryError(ValueError):
@@ -242,8 +250,7 @@ def ingest(state: dict, fixture: dict, now: datetime) -> dict:
         source = sources[batch["source_id"]]
         logical_key = _text(batch["logical_key"])
         run_key = source["source_id"] + ":" + logical_key
-        allowed = all(permitted(source, use, now) for use in
-                      ("collect", "raw_retention", "derived_retention"))
+        allowed = all(permitted(source, use, now) for use in STORE_USES)
         # A skipped run retains only its operational identity, not a payload-derived hash.
         fingerprint = digest(batch) if allowed else digest([source["source_id"], logical_key, "skipped"])
         if run_key in result["runs"]:
@@ -263,11 +270,13 @@ def ingest(state: dict, fixture: dict, now: datetime) -> dict:
         if not allowed or outcome != "succeeded":
             continue
         for raw in batch["records"]:
+            unresolved_reason = None
             try:
                 record = normalize(raw, source, result["identities"])
             except DiscoveryError as exc:
-                if str(exc) != "unresolved_typed_identity":
+                if str(exc) not in UNRESOLVED_IDENTITY:
                     raise
+                unresolved_reason = str(exc)
                 # Known schema and valid facts, but no reviewed typed crosswalk.
                 # Retain only the declared observation, never an arbitrary payload.
                 record = {**raw, "source_id": source["source_id"],
@@ -282,7 +291,7 @@ def ingest(state: dict, fixture: dict, now: datetime) -> dict:
             if "venue_id" not in record:
                 result["unresolved"][unresolved_id] = {
                     **record, "source_record_id": unresolved_id,
-                    "reason": "unresolved_typed_identity", "collection_run_key": run_key,
+                    "reason": unresolved_reason, "collection_run_key": run_key,
                     "payload_hash": digest(raw), "adapter_version": source["adapter_version"],
                 }
                 run["item_count"] += 1
@@ -372,7 +381,7 @@ def project_feed(state: dict, now: datetime) -> dict:
     grouped: dict[str, list[dict]] = {}
     for record in state["records"].values():
         source = state["sources"][record["source_id"]]
-        if (all(permitted(source, use, now) for use in ("display", "raw_retention", "derived_retention"))
+        if (all(permitted(source, use, now) for use in DISPLAY_USES)
                 and record["permission_id"] == source["permission"]["permission_id"]):
             grouped.setdefault(record["event_id"], []).append(record)
     events = []
@@ -380,8 +389,7 @@ def project_feed(state: dict, now: datetime) -> dict:
     unresolved = []
     for record in state.get("unresolved", {}).values():
         source = state["sources"][record["source_id"]]
-        if (all(permitted(source, use, now) for use in
-                ("display", "raw_retention", "derived_retention"))
+        if (all(permitted(source, use, now) for use in DISPLAY_USES)
                 and record["permission_id"] == source["permission"]["permission_id"]):
             unresolved.append({k: record[k] for k in (
                 "source_record_id", "source_id", "vendor_event_id", "title", "reason")})

@@ -48,8 +48,10 @@ Migrations were tested only on disposable local PostgreSQL; no remote schema was
   are retained in `unresolved` with a fixed reason, source identity, permission and run
   lineage. They create no canonical event or artist. Invalid observations still reject
   the transaction. There is no name matching. Existing crosswalk reassignment requires review.
-- Check collection plus raw and derived retention before reading a batch into the store.
-  Display permission is independent and checked again on every product read. Unknown,
+- Check collection plus derived retention before reading a batch into the store. The store
+  keeps normalized observations and a payload hash, never the raw provider payload, so
+  raw retention is not required; it stays reserved for any future path that keeps payloads.
+  Display permission plus derived retention is checked again on every product read. Unknown,
   false, future approval, expiry and revocation all deny the relevant use.
 - Matching requires reviewed canonical venue/artist mappings, exact known start time,
   and the same headliner set. Different known start times remain separate. Date-only
