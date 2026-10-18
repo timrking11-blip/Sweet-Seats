@@ -59,13 +59,15 @@ jobs:
       PGDATABASE: postgres
     steps:
       - uses: actions/checkout@v4
+      - name: Emulate Supabase API roles
+        run: psql -v ON_ERROR_STOP=1 -q -f supabase/ci/emulate_supabase_roles.sql
       - name: Apply migrations
         run: |
           for f in $(ls supabase/migrations/*.sql | sort); do
             echo "Applying $f"
             psql -v ON_ERROR_STOP=1 -q -f "$f"
           done
-      - name: Permission tests
+      - name: Permission and RLS tests
         run: |
           for f in supabase/tests/*.sql; do
             echo "Running $f"
@@ -86,6 +88,13 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
+      - name: Development dependency audit (report only)
+        # The eslint braces/micromatch chain has no patched release yet; keep it visible
+        # without blocking. Promote to blocking once eslint-config-next ships a fix.
+        continue-on-error: true
+        run: npm audit --audit-level=high
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run build
