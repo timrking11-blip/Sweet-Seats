@@ -179,8 +179,11 @@ as $$
     join public.source_permissions permission on permission.source_id = source.source_id
     where source.source_id = requested_source_id
       and source.access_status in ('approved', 'active')
+      -- A permission applies only within [approved_at, revoked_at/expires_at) at as_of.
+      -- A null as_of makes these comparisons null, which denies.
       and permission.approved_at is not null
-      and permission.revoked_at is null
+      and permission.approved_at <= as_of
+      and (permission.revoked_at is null or permission.revoked_at > as_of)
       and (permission.expires_at is null or permission.expires_at > as_of)
       and case requested_use
         when 'collect' then permission.collect_allowed

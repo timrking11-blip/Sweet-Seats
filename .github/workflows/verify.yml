@@ -36,6 +36,46 @@ jobs:
       - run: ruff check .
       - run: pytest -q
 
+  database:
+    name: Database permissions
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Disposable CI container; never a Supabase project or shared database.
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - name: Emulate Supabase API roles
+        run: psql -v ON_ERROR_STOP=1 -q -f supabase/ci/emulate_supabase_roles.sql
+      - name: Apply migrations
+        run: |
+          for f in $(ls supabase/migrations/*.sql | sort); do
+            echo "Applying $f"
+            psql -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+      - name: Permission and RLS tests
+        run: |
+          for f in supabase/tests/*.sql; do
+            echo "Running $f"
+            psql -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+      - name: Negative controls (tests must catch deliberate breakage)
+        run: bash supabase/ci/negative_controls.sh
+
   web:
     name: Web PWA
     runs-on: ubuntu-latest
@@ -50,6 +90,13 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web/package-lock.json
       - run: npm ci
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
+      - name: Development dependency audit (report only)
+        # The eslint braces/micromatch chain has no patched release yet; keep it visible
+        # without blocking. Promote to blocking once eslint-config-next ships a fix.
+        continue-on-error: true
+        run: npm audit --audit-level=high
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run build
