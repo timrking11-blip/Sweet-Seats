@@ -14,6 +14,7 @@ set -uo pipefail
 ROLES=supabase/ci/emulate_supabase_roles.sql
 PERMISSIONS_TEST=supabase/tests/source_permissions_test.sql
 RLS_TEST=supabase/tests/rls_denial_test.sql
+MB_RUNS_TEST=supabase/tests/musicbrainz_collection_runs_test.sql
 mapfile -t MIGRATIONS < <(ls supabase/migrations/*.sql | sort)
 
 failures=0
@@ -105,6 +106,15 @@ run_control "revocation treated as immediate" \
 run_control "expiry boundary made inclusive" \
   "FAIL expiry exactly at as_of is denied" "$PERMISSIONS_TEST" \
   "" yes "s/permission.expires_at > as_of/permission.expires_at >= as_of/"
+
+# MusicBrainz collection runs.
+run_control "record_musicbrainz_run executable by anon" \
+  "FAIL anon can execute record_musicbrainz_run" "$MB_RUNS_TEST" \
+  "grant execute on function public.record_musicbrainz_run(text, text, integer, text, text, timestamptz) to anon;"
+
+run_control "collection run ignores permission revocation" \
+  "FAIL run used permission" "$MB_RUNS_TEST" \
+  "" yes "s/and (p.revoked_at is null or p.revoked_at > recorded_at)//"
 
 echo "${count} negative controls, ${failures} not caught"
 [ "$failures" -eq 0 ]
