@@ -1,0 +1,51 @@
+{
+  "_sweet_seats_fixture": {
+    "synthetic": true,
+    "shape": "Ticketmaster Discovery API v2 GET /discovery/v2/attractions/{id}.json",
+    "note": "Hand-written. Every artist, id and URL is invented; no Ticketmaster payload or image was copied."
+  },
+  "name": "Glass Harbor",
+  "type": "attraction",
+  "id": "SYNTH-AT-0001",
+  "test": false,
+  "url": "https://tickets.example.invalid/artist/SYNTH-AT-0001",
+  "locale": "en-us",
+  "images": [
+    {
+      "ratio": "3_2",
+      "url": "https://images.example.invalid/SYNTH-AT-0001.jpg",
+      "width": 305,
+      "height": 203,
+      "fallback": false
+    }
+  ],
+  "classifications": [
+    {
+      "primary": true,
+      "segment": {
+        "id": "SYNTH-SEG-MUSIC",
+        "name": "Music"
+      },
+      "genre": {
+        "id": "SYNTH-GEN-ROCK",
+        "name": "Rock"
+      }
+    }
+  ],
+  "externalLinks": {
+    "homepage": [
+      {
+        "url": "https://glass-harbor.example.invalid/"
+      }
+    ]
+  },
+  "upcomingEvents": {
+    "_total": 2,
+    "ticketmaster": 2
+  },
+  "_links": {
+    "self": {
+      "href": "/discovery/v2/attractions/SYNTH-AT-0001?locale=en-us"
+    }
+  }
+}
