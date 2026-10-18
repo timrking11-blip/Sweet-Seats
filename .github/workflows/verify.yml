@@ -73,6 +73,8 @@ jobs:
             echo "Running $f"
             psql -v ON_ERROR_STOP=1 -q -f "$f"
           done
+      - name: Negative controls (tests must catch deliberate breakage)
+        run: bash supabase/ci/negative_controls.sh
 
   web:
     name: Web PWA
