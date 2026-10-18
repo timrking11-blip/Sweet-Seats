@@ -132,6 +132,9 @@ def normalize(record: dict, source: dict, identities: dict) -> dict:
     try:
         venue_id = source["venue_mappings"][record["venue_vendor_id"]]
         venue = identities["venues"][identifier(venue_id)]
+    except (KeyError, TypeError) as exc:
+        raise DiscoveryError("unresolved_venue_identity") from exc
+    try:
         performers = []
         for credit in record["performers"]:
             if set(credit) != {"vendor_artist_id", "role", "billing_order"}:
