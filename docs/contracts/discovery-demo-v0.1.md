@@ -5,9 +5,12 @@ This is an implementation proposal, not a new approved Notion definition or prod
 Traces to SS-DATA-0.1 and SS-ADR-002/003/004. Research remains isolated under SS-ADR-007.
 
 The existing Next.js/TypeScript app calls the existing Python/FastAPI service.
-The `.local/discovery.json` snapshot is a disposable local persistence adapter. It is
-not an operational database, production store, or substitute for PostgreSQL. There is
-no SQLite database, cloud storage, database driver, provider SDK, or new dependency.
+The local adapter uses `psycopg[binary]==3.2.13` and PostgreSQL 16.
+`SWEET_SEATS_LOCAL_DATABASE_URL` selects it explicitly; only loopback hosts are accepted.
+There is no schema creation/migration on application startup. Configured database
+failures produce 503, never fallback. Without the variable, `.local/discovery.json`
+remains a legacy demo adapter. `ingest()` and `project_feed()` are shared storage-independent
+functions; neither depends on the database driver.
 
 ## Contracts and PostgreSQL correspondence
 
@@ -21,10 +24,21 @@ no SQLite database, cloud storage, database driver, provider SDK, or new depende
 | Source-record performer credits | Many-to-many event/artist/role credits; deduplicated by artist UUID and role at read time |
 | `runs` | Source + logical request identity; succeeded, empty, failed or skipped outcome |
 
-These are contract correspondences, not a claim that a PostgreSQL schema was created,
-validated or applied. The existing `supabase/migrations/202610130001_phase_1_foundation.sql`
-remains an unapplied draft; it lacks a SourceEventRecord table and needs review before use.
-The research withdrawal marker in `db/migrations/0001_research_jobs.sql` is unrelated.
+The foundation migration remains unchanged. The additive
+`supabase/migrations/20261018170819_discovery_observations.sql` creates
+`source_event_records`, `source_event_performers` and a singleton seed marker;
+adds replay digests, event match keys and synthetic source configuration; and adds
+composite FKs enforcing observation → source/permission/run/event-mapping lineage.
+An observation's permission must equal its run's permission. Typed artist/venue/event
+mappings are persisted. Current grants are read from `source_permissions` on every read.
+PostgreSQL is the store, not a mirror of a JSON snapshot. The research ledger is unchanged.
+
+Observation timestamps retain zoned ISO source strings for exact API parity; SQL
+checks their ordering and shared normalization rejects naive times. Collection timestamps
+render in UTC. Observation credits are projected after permission checks; the canonical
+`event_performers` table is not populated with an unconditional union. Canonical schedule
+columns are provisional cached facts; API reads always reproject eligible observations.
+Migrations were tested only on disposable local PostgreSQL; no remote schema was changed.
 
 ## Synthetic ingestion
 
@@ -45,9 +59,15 @@ The research withdrawal marker in `db/migrations/0001_research_jobs.sql` is unre
   separately in typed mappings. Production issuance/matching review remains a later gate.
 - A source/logical-key replay is a no-op. Changed content at the same key is rejected.
   New observations require a new logical key. Source facts remain independently stored.
-- Seed writes are single-writer and atomic via an exclusive lock and same-directory
-  file replacement. No public ingestion endpoint exists. A crashed writer can leave a
-  lock requiring operator inspection; this is not a durable queue or recovery system.
+- PostgreSQL seed writes validate the fixture and persist all rows in one transaction.
+  A transaction-scoped advisory lock serializes writers across processes; unique
+  source/logical keys and SHA-256 digests provide durable replay checks. Database failures
+  roll back all writes. Reads use one repeatable-read transaction. The seed marker
+  distinguishes an unseeded database from a successfully empty collection.
+- The legacy JSON adapter retains its exclusive lock and atomic file replacement.
+- Known starts must agree with the NYC local date. Existing typed vendor mapping
+  targets cannot be silently reassigned; identity amendments require separate review.
+- No ingestion endpoint, durable queue or production recovery system is introduced.
 
 ## Product read model
 
@@ -119,10 +139,9 @@ disabled; this command ingests only explicit synthetic fixtures.
 
 ## Remaining gates
 
-Reconcile the stale local checkout with remote main before any commit. Agree on the
-single migration ledger and SourceEventRecord implementation. Add disposable local
-PostgreSQL tests for real constraints, transactional replay and recovery, followed by
-auth/RLS and cross-user denial tests before adding user data. Approve provider-specific
-rights, field precedence, retention/deletion and production freshness thresholds before
-live collection. Research reports cannot enter this fixture or normalization path.
-
+The local PostgreSQL adapter and migration ledger are implemented, with disposable
+PostgreSQL 16 acceptance, permission/RLS and negative-control checks in CI. These tests
+do not authorize hosted deployment or production storage. User auth and cross-user
+denial tests precede adding user data. Approve provider-specific rights, field precedence,
+retention/deletion and production freshness before live collection. Research reports
+cannot enter this fixture or normalization path.
