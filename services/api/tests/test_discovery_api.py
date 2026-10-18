@@ -1,6 +1,7 @@
 """API contract tests over a disposable persisted synthetic store."""
 import copy
 import json
+from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import UUID
@@ -51,6 +52,12 @@ def test_fixture_to_persisted_list_and_detail(discovery_client):
     assert event["available_at"] == "2026-10-18T06:50:00Z"
     assert event["stale"] is False
     assert event["ticket_url"] is None
+    # Observation-based freshness and provenance timestamps survive persistence and the API.
+    observed = timestamp(event["observed_at"])
+    assert observed == timestamp("2026-10-18T06:50:00Z")
+    assert timestamp(event["fresh_until"]) - observed == timedelta(hours=24)
+    assert timestamp(event["first_seen_at"]) <= observed
+    assert {s["observed_at"] for s in event["sources"]} == {"2026-10-18T06:50:00Z"}
 
 
 def test_unseeded_store_is_503_with_redacted_error(discovery_client):

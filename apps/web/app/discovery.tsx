@@ -30,7 +30,8 @@ type Feed = {
   collections: { name: string; status: string; finished_at: string; item_count: number }[];
 };
 
-type Remote<T> = { state: "loading" } | { state: "error" } | { state: "ready"; data: T };
+// "missing" (404) means absent or withheld from display; it is not a provider failure.
+type Remote<T> = { state: "loading" } | { state: "error" } | { state: "missing" } | { state: "ready"; data: T };
 
 function useDiscovery<T>(path: string) {
   const [result, setResult] = useState<Remote<T>>({ state: "loading" });
@@ -42,6 +43,10 @@ function useDiscovery<T>(path: string) {
     const timeout = setTimeout(() => controller.abort(), 8000);
     fetch(`/api/discovery/${path}`, { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
+        if (response.status === 404) {
+          if (active) setResult({ state: "missing" });
+          return;
+        }
         if (!response.ok) throw new Error("unavailable");
         const data = await response.json();
         if (data.mode !== "synthetic") throw new Error("unexpected_mode");
@@ -79,7 +84,7 @@ export function DiscoveryFeed() {
   const { result, retry } = useDiscovery<Feed>("events");
   const [query, setQuery] = useState("");
   if (result.state === "loading") return <div className="feed-state" role="status" aria-busy="true">Loading the local event feed…</div>;
-  if (result.state === "error") return <Failure retry={retry} />;
+  if (result.state !== "ready") return <Failure retry={retry} />;
   const { data } = result;
   const matches = data.events.filter((event) =>
     [event.title, event.venue.name, event.venue.neighborhood, ...event.performers.map((p) => p.name)]
@@ -129,6 +134,9 @@ function Failure({ retry }: { retry: () => void }) {
 export function EventDetail({ eventId }: { eventId: string }) {
   const { result, retry } = useDiscovery<{ mode: "synthetic"; event: DiscoveryEvent }>(`events/${encodeURIComponent(eventId)}`);
   if (result.state === "loading") return <div className="feed-state" role="status">Loading event details…</div>;
+  if (result.state === "missing") return <div className="feed-state" role="status"><h1>This event isn&apos;t available.</h1>
+    <p>It doesn&apos;t exist, or its sources don&apos;t currently permit display. This says nothing about ticket availability.</p>
+    <Link className="secondary button-link" href="/#discover-title">Back to all events</Link></div>;
   if (result.state === "error") return <Failure retry={retry} />;
   const event = result.data.event;
   return <article className="event-detail">
