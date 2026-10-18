@@ -1,0 +1,117 @@
+"""API contract tests over a disposable persisted synthetic store."""
+import copy
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from uuid import UUID
+
+import pytest
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+
+from app.discovery import DEFAULT_FIXTURE, FixtureStore, timestamp
+from app.main import app, discovery_now, discovery_store, event_detail, events
+
+NOW = timestamp("2026-10-18T07:00:00Z")
+
+
+@pytest.fixture
+def discovery_client():
+    root = DEFAULT_FIXTURE.parents[3] / ".local" / "tests"
+    root.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(dir=root) as directory:
+        store = FixtureStore(Path(directory) / "events.json")
+        fixture = json.loads(DEFAULT_FIXTURE.read_text(encoding="utf-8"))
+        app.dependency_overrides[discovery_store] = lambda: store
+        app.dependency_overrides[discovery_now] = lambda: NOW
+        try:
+            with TestClient(app) as client:
+                yield client, store, fixture
+        finally:
+            app.dependency_overrides.pop(discovery_store, None)
+            app.dependency_overrides.pop(discovery_now, None)
+
+
+def test_fixture_to_persisted_list_and_detail(discovery_client):
+    client, store, fixture = discovery_client
+    store.seed(fixture, NOW)
+    response = client.get("/v1/events")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    feed = response.json()
+    assert feed["mode"] == "synthetic"
+    assert len(feed["events"]) == 3
+    event = feed["events"][0]
+    detail = client.get("/v1/events/" + event["event_id"])
+    assert detail.status_code == 200
+    assert detail.json()["event"] == event
+    assert len(event["performers"]) == 2
+    assert len(event["sources"]) == 2
+    assert event["starts_at"] == "2026-11-07T01:00:00Z"
+    assert event["available_at"] == "2026-10-18T06:50:00Z"
+    assert event["stale"] is False
+    assert event["ticket_url"] is None
+
+
+def test_unseeded_store_is_503_with_redacted_error(discovery_client):
+    client, store, _ = discovery_client
+    response = client.get("/v1/events")
+    assert response.status_code == 503
+    assert str(store.path) not in response.text
+    assert "events" not in response.json()
+
+
+def test_nonexistent_event_is_404(discovery_client):
+    client, store, fixture = discovery_client
+    store.seed(fixture, NOW)
+    assert client.get("/v1/events/00000000-0000-4000-8000-000000000000").status_code == 404
+
+
+def test_unknown_display_rights_hide_list_and_detail(discovery_client):
+    client, store, fixture = discovery_client
+    store.seed(fixture, NOW)
+    event_id = client.get("/v1/events").json()["events"][0]["event_id"]
+    altered = copy.deepcopy(fixture)
+    for source in altered["sources"]:
+        source["permission"]["uses"].pop("display")
+    store.seed(altered, NOW)
+    assert client.get("/v1/events").json()["status"] == "blocked"
+    assert client.get("/v1/events/" + event_id).status_code == 404
+
+
+@pytest.mark.parametrize("outcome,status", [("empty", "empty"), ("failed", "unavailable")])
+def test_empty_and_failed_remain_distinct_through_api(discovery_client, outcome, status):
+    client, store, fixture = discovery_client
+    for batch in fixture["batches"]:
+        batch.update(outcome=outcome, records=[])
+    store.seed(fixture, NOW)
+    response = client.get("/v1/events")
+    assert response.status_code == 200
+    assert response.json()["status"] == status
+    assert response.json()["events"] == []
+
+
+def test_no_ingestion_or_research_write_route_is_mounted(discovery_client):
+    client, _, _ = discovery_client
+    assert client.post("/v1/events", json={}).status_code == 405
+    assert client.post("/linear/webhook", json={}).status_code == 404
+    assert client.post("/v1/research", json={}).status_code == 404
+
+
+def test_direct_read_handlers_use_persistence(tmp_path):
+    store = FixtureStore(tmp_path / "events.json")
+    fixture = json.loads(DEFAULT_FIXTURE.read_text(encoding="utf-8"))
+    store.seed(fixture, NOW)
+    feed = events(store=store, now=NOW)
+    assert len(feed["events"]) == 3
+    expected = feed["events"][0]
+    actual = event_detail(UUID(expected["event_id"]), store=store, now=NOW)
+    assert actual["event"] == expected
+    assert len(expected["sources"]) == 2
+    assert len(expected["performers"]) == 2
+
+
+def test_direct_read_handler_does_not_turn_missing_store_into_empty(tmp_path):
+    with pytest.raises(HTTPException) as caught:
+        events(store=FixtureStore(tmp_path / "missing.json"), now=NOW)
+    assert caught.value.status_code == 503
