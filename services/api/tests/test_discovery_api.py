@@ -122,3 +122,28 @@ def test_direct_read_handler_does_not_turn_missing_store_into_empty(tmp_path):
     with pytest.raises(HTTPException) as caught:
         events(store=FixtureStore(tmp_path / "missing.json"), now=NOW)
     assert caught.value.status_code == 503
+
+
+def test_pagination_orders_persisted_events_without_duplicates(discovery_client):
+    client, store, fixture = discovery_client
+    store.seed(fixture, NOW)
+    first = client.get("/v1/events?limit=2").json()
+    second = client.get("/v1/events?limit=2&offset=2").json()
+    assert first["pagination"] == {"limit": 2, "offset": 0, "total": 3, "next_offset": 2}
+    assert second["pagination"]["next_offset"] is None
+    combined = first["events"] + second["events"]
+    assert len({e["event_id"] for e in combined}) == 3
+    assert [e["local_date"] for e in combined] == sorted(e["local_date"] for e in combined)
+    for query in ("limit=0", "limit=101", "offset=-1", "limit=bad"):
+        assert client.get("/v1/events?" + query).status_code == 422
+
+
+def test_unresolved_records_visible_without_unverified_canonical_artist(discovery_client):
+    client, store, fixture = discovery_client
+    fixture["batches"][0]["records"][0]["performers"][0]["vendor_artist_id"] = "unknown"
+    store.seed(fixture, NOW)
+    feed = client.get("/v1/events").json()
+    assert feed["review_count"] == 1
+    assert feed["unresolved"][0]["reason"] == "unresolved_typed_identity"
+    assert len(feed["events"]) == 3
+

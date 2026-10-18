@@ -1,8 +1,8 @@
 from datetime import UTC, date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field, HttpUrl
 
 from .discovery import DiscoveryError, FixtureStore
@@ -34,7 +34,7 @@ class NormalizedEventRecord(BaseModel):
     local_date: date
     timezone: str = "America/New_York"
     starts_at: datetime | None = None
-    status: Literal["scheduled", "postponed", "cancelled", "unknown"] = "unknown"
+    status: Literal["scheduled", "rescheduled", "postponed", "cancelled", "unknown"] = "unknown"
     artist_names: list[str] = []
     venue_name: str | None = None
 
@@ -71,8 +71,14 @@ def _read_feed(store: FixtureStore, now: datetime) -> dict:
 
 
 @app.get("/v1/events")
-def events(store: FixtureStore = Depends(discovery_store), now: datetime = Depends(discovery_now)):
-    return _read_feed(store, now)
+def events(store: FixtureStore = Depends(discovery_store), now: datetime = Depends(discovery_now),
+           limit: Annotated[int, Query(ge=1, le=100)] = 100,
+           offset: Annotated[int, Query(ge=0)] = 0):
+    feed = _read_feed(store, now)
+    total = len(feed["events"])
+    return {**feed, "events": feed["events"][offset:offset + limit],
+            "pagination": {"limit": limit, "offset": offset, "total": total,
+                           "next_offset": offset + limit if offset + limit < total else None}}
 
 
 @app.get("/v1/events/{event_id}")
@@ -83,4 +89,5 @@ def event_detail(event_id: UUID, store: FixtureStore = Depends(discovery_store),
     if event is None:
         raise HTTPException(status_code=404, detail="Event unavailable or not permitted for display.")
     return {"mode": feed["mode"], "generated_at": feed["generated_at"], "event": event}
+
 

@@ -99,5 +99,10 @@ jobs:
         run: npm audit --audit-level=high
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm test
       - run: npm run build
+      - name: Check built client secret boundary
+        working-directory: .
+        run: python -m unittest tests.test_frontend_boundary -v
+
 

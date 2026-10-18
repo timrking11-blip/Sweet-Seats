@@ -14,6 +14,7 @@ import tempfile
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid5
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_STORE = ROOT / ".local" / "discovery.json"
@@ -89,14 +90,34 @@ def normalize(record: dict, source: dict, identities: dict) -> dict:
         raise DiscoveryError("unexpected_record_fields")
     if record["timezone"] != "America/New_York":
         raise DiscoveryError("unsupported_fixture_timezone")
-    date.fromisoformat(record["local_date"])
+    try:
+        local_day = date.fromisoformat(record["local_date"])
+    except (ValueError, TypeError) as exc:
+        raise DiscoveryError("invalid_local_date") from exc
     if record["starts_at"] is not None:
-        timestamp(record["starts_at"])
+        if timestamp(record["starts_at"]).astimezone(ZoneInfo(record["timezone"])).date() != local_day:
+            raise DiscoveryError("local_date_timezone_mismatch")
     observed, available = timestamp(record["observed_at"]), timestamp(record["available_at"])
     if observed > available:
         raise DiscoveryError("availability_before_observation")
-    if record["status"] not in {"scheduled", "postponed", "cancelled", "unknown"}:
+    if record["status"] not in {"scheduled", "rescheduled", "postponed", "cancelled", "unknown"}:
         raise DiscoveryError("invalid_event_status")
+    # Validate the entire observation before deciding whether identities are unresolved.
+    _text(record["vendor_event_id"])
+    _text(record["title"])
+    _text(record["venue_vendor_id"])
+    _demo_url(record["source_url"])
+    if record["ticket_url"] is not None:
+        _demo_url(record["ticket_url"])
+    if not isinstance(record["performers"], list) or not record["performers"]:
+        raise DiscoveryError("invalid_venue_or_credits")
+    for credit in record["performers"]:
+        if not isinstance(credit, dict) or set(credit) != {"vendor_artist_id", "role", "billing_order"}:
+            raise DiscoveryError("unexpected_credit_fields")
+        _text(credit["vendor_artist_id"])
+        if (credit["role"] not in {"headliner", "support", "performer"}
+                or type(credit["billing_order"]) is not int or credit["billing_order"] < 0):
+            raise DiscoveryError("invalid_credit")
     try:
         venue_id = source["venue_mappings"][record["venue_vendor_id"]]
         venue = identities["venues"][identifier(venue_id)]
@@ -146,6 +167,7 @@ def ingest(state: dict, fixture: dict, now: datetime) -> dict:
     if set(fixture) != {"version", "synthetic", "identities", "sources", "batches"}:
         raise DiscoveryError("unexpected_fixture_fields")
     result = copy.deepcopy(state)
+    result.setdefault("unresolved", {})
     identities = fixture["identities"]
     for kind in ("artists", "venues"):
         for key, entity in identities[kind].items():
@@ -174,6 +196,11 @@ def ingest(state: dict, fixture: dict, now: datetime) -> dict:
         _text(source["adapter_version"])
         identifier(source["permission"]["permission_id"])
         sources[source_id] = source
+        prior_source = result["sources"].get(source_id)
+        if prior_source:
+            for kind in ("artist_mappings", "venue_mappings"):
+                if any(source[kind].get(key) != target for key, target in prior_source[kind].items()):
+                    raise DiscoveryError("identity_crosswalk_revision_requires_review")
     result["sources"].update(sources)
     for batch in fixture["batches"]:
         if set(batch) != {"source_id", "logical_key", "outcome", "records"}:
@@ -202,30 +229,57 @@ def ingest(state: dict, fixture: dict, now: datetime) -> dict:
         if not allowed or outcome != "succeeded":
             continue
         for raw in batch["records"]:
-            record = normalize(raw, source, result["identities"])
+            try:
+                record = normalize(raw, source, result["identities"])
+            except DiscoveryError as exc:
+                if str(exc) != "unresolved_typed_identity":
+                    raise
+                # Known schema and valid facts, but no reviewed typed crosswalk.
+                # Retain only the declared observation, never an arbitrary payload.
+                record = {**raw, "source_id": source["source_id"],
+                          "permission_id": source["permission"]["permission_id"]}
             if timestamp(record["available_at"]) > now:
                 raise DiscoveryError("future_observation")
             p = source["permission"]
             if not (timestamp(p["approved_at"]) <= timestamp(record["observed_at"])
                     < timestamp(p["expires_at"])):
                 raise DiscoveryError("observation_outside_permission")
+            unresolved_id = str(uuid5(NAMESPACE, digest([source["source_id"], raw])))
+            if "venue_id" not in record:
+                result["unresolved"][unresolved_id] = {
+                    **record, "source_record_id": unresolved_id,
+                    "reason": "unresolved_typed_identity", "collection_run_key": run_key,
+                    "payload_hash": digest(raw), "adapter_version": source["adapter_version"],
+                }
+                run["item_count"] += 1
+                continue
+            # Replaying observations under a new reviewed crosswalk can resolve a prior item.
+            result["unresolved"].pop(unresolved_id, None)
             mapping_key = source["source_id"] + ":event:" + record["vendor_event_id"]
             headliners = sorted(p["artist_id"] for p in record["performers"]
                                 if p["role"] == "headliner")
             match_key = digest([record["venue_id"], timestamp(record["starts_at"]).isoformat(),
                                 headliners]) if record["starts_at"] and headliners else None
             event_id = result["mappings"].get(mapping_key, {}).get("event_id")
+            mapping_method = "source_identity" if event_id else None
             if event_id is None:
                 matches = [e["event_id"] for e in result["events"].values()
                            if match_key and e["match_key"] == match_key]
                 if len(matches) > 1:
-                    raise DiscoveryError("ambiguous_event_match")
+                    result["unresolved"][unresolved_id] = {
+                        **record, "source_record_id": unresolved_id,
+                        "reason": "ambiguous_event_match", "collection_run_key": run_key,
+                        "payload_hash": digest(raw),
+                    }
+                    run["item_count"] += 1
+                    continue
                 event_id = matches[0] if matches else str(uuid5(NAMESPACE, mapping_key))
+                mapping_method = "known_identity_exact_occurrence" if matches else "source_identity"
             result["events"][event_id] = {"event_id": event_id, "match_key": match_key}
             result["mappings"][mapping_key] = {
                 "source_id": source["source_id"], "record_type": "event",
                 "vendor_id": record["vendor_event_id"], "event_id": event_id,
-                "mapping_method": "known_identity_exact_occurrence" if match_key else "source_identity",
+                "mapping_method": mapping_method,
             }
             record_id = str(uuid5(NAMESPACE, digest(record)))
             result["records"][record_id] = {
@@ -285,6 +339,15 @@ class FixtureStore:
                 grouped.setdefault(record["event_id"], []).append(record)
         events = []
         review_count = 0
+        unresolved = []
+        for record in state.get("unresolved", {}).values():
+            source = state["sources"][record["source_id"]]
+            if (all(permitted(source, use, now) for use in
+                    ("display", "raw_retention", "derived_retention"))
+                    and record["permission_id"] == source["permission"]["permission_id"]):
+                unresolved.append({k: record[k] for k in (
+                    "source_record_id", "source_id", "vendor_event_id", "title", "reason")})
+        review_count += len(unresolved)
         for event_id, records in grouped.items():
             records.sort(key=lambda r: (timestamp(r["available_at"]), r["source_record_id"]))
             # Historical observations remain stored, but cannot resurrect removed credits.
@@ -318,7 +381,9 @@ class FixtureStore:
                            "fresh_until": fresh_until.isoformat(), "stale": now >= fresh_until,
                            "ticket_url": None, "ticket_notice": "Synthetic event; no real ticket listing.",
                            "reconciliation_status": "provisional", "sources": provenance})
-        events.sort(key=lambda e: (e["local_date"], e["starts_at"] or "", e["event_id"]))
+        events.sort(key=lambda e: (e["local_date"],
+                                  timestamp(e["starts_at"]).isoformat() if e["starts_at"] else "",
+                                  e["event_id"]))
         latest_runs = {}
         for run in state["runs"].values():
             prior = latest_runs.get(run["source_id"])
@@ -336,7 +401,8 @@ class FixtureStore:
             status = "blocked"
         return {"mode": "synthetic", "status": status, "generated_at": now.isoformat(),
                 "freshness_rule": "Demo only: stale after 24 hours; not a production SLA.",
-                "events": events, "collections": runs, "review_count": review_count}
+                "events": events, "collections": runs, "review_count": review_count,
+                "unresolved": sorted(unresolved, key=lambda r: r["source_record_id"])}
 
 
 def main() -> None:
@@ -348,10 +414,13 @@ def main() -> None:
         fixture = json.loads(args.fixture.read_text(encoding="utf-8"))
         result = FixtureStore(args.store).seed(fixture, datetime.now(UTC))
         print(json.dumps({"synthetic": True, "events": len(result["events"]),
-                          "records": len(result["records"]), "network_calls": 0}))
-    except (DiscoveryError, OSError, ValueError, KeyError, TypeError):
-        parser.exit(1, "Synthetic ingestion failed; no provider call was made.\n")
+                          "records": len(result["records"]),
+                          "unresolved": len(result.get("unresolved", {})), "network_calls": 0}))
+    except (DiscoveryError, OSError, ValueError, KeyError, TypeError) as exc:
+        code = str(exc) if isinstance(exc, DiscoveryError) else "invalid_fixture_or_store"
+        parser.exit(1, f"Synthetic ingestion failed: {code}; no provider call was made.\n")
 
 
 if __name__ == "__main__":
     main()
+
