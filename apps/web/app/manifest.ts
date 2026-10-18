@@ -1,0 +1,14 @@
+import type { MetadataRoute } from "next";
+
+export default function manifest(): MetadataRoute.Manifest {
+  return {
+    name: "Sweet Seats",
+    short_name: "Sweet Seats",
+    description: "NYC music discovery, with source-backed announcement intelligence.",
+    start_url: "/",
+    display: "standalone",
+    background_color: "#100c19",
+    theme_color: "#100c19",
+  };
+}
+
