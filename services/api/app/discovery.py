@@ -94,9 +94,9 @@ def normalize(record: dict, source: dict, identities: dict) -> dict:
         local_day = date.fromisoformat(record["local_date"])
     except (ValueError, TypeError) as exc:
         raise DiscoveryError("invalid_local_date") from exc
-    if record["starts_at"] is not None:
-        if timestamp(record["starts_at"]).astimezone(ZoneInfo(record["timezone"])).date() != local_day:
-            raise DiscoveryError("local_date_timezone_mismatch")
+    if (record["starts_at"] is not None
+            and timestamp(record["starts_at"]).astimezone(ZoneInfo(record["timezone"])).date() != local_day):
+        raise DiscoveryError("local_date_timezone_mismatch")
     observed, available = timestamp(record["observed_at"]), timestamp(record["available_at"])
     if observed > available:
         raise DiscoveryError("availability_before_observation")
