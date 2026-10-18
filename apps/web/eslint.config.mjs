@@ -10,7 +10,10 @@ const compat = new FlatCompat({ baseDirectory: __dirname });
 const eslintConfig = [
   globalIgnores([".next/**", "node_modules/**", "coverage/**", "next-env.d.ts"]),
   ...compat.extends("next/core-web-vitals", "next/typescript"),
+  { files: ["tests/**/*.cjs", "tools/**/*.cjs"],
+    rules: { "@typescript-eslint/no-require-imports": "off" } },
 ];
 
 export default eslintConfig;
+
 
