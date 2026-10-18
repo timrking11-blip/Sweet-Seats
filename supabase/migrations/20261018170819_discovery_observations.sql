@@ -16,7 +16,9 @@ alter table public.source_entity_mappings add constraint mapping_event_source_ke
 create table public.discovery_state (
   singleton boolean primary key default true check (singleton),
   version text not null check (version = 'SS-DISCOVERY-DEMO-0.1'),
-  synthetic boolean not null check (synthetic)
+  synthetic boolean not null check (synthetic),
+  unresolved_records jsonb not null default '{}'::jsonb
+    check (jsonb_typeof(unresolved_records) = 'object')
 );
 
 create table public.source_event_records (
