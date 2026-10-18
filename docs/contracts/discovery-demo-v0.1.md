@@ -84,6 +84,14 @@ Freshness is computed from observation time, not fetch/render time. The syntheti
 mark it sold out, or erase prior facts. A successful empty collection is distinct from
 a failure. Missing/corrupt stores return 503; absent/withheld event details return 404.
 
+Discovery list/detail responses and their handled errors explicitly send
+`Cache-Control: private, no-store, max-age=0`, `CDN-Cache-Control: no-store`,
+`Pragma: no-cache` and `Expires: 0`. They issue no ETag/Last-Modified validators;
+conditional requests still run a current permission-filtered projection. This is
+HTTP cache prevention, not deletion of retained observations or removal of already
+rendered browser state. Client revalidation, external cache configuration and
+retention/deletion remain separate release checks.
+
 Ticket URLs are null in this demo. Reserved source URLs are shown as provenance text,
 not represented as real announcements. There are no live ticket links, follows, saved
 events, authentication, user data, notification timers, prediction or purchase flows.

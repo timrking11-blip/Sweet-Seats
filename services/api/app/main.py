@@ -2,7 +2,7 @@ from datetime import UTC, date, datetime
 from typing import Literal
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, HttpUrl
 
 from .discovery import DiscoveryError
@@ -13,6 +13,22 @@ app = FastAPI(
     version="0.1.0",
     description="Server-side contracts for provenance-first concert discovery.",
 )
+
+
+@app.middleware("http")
+async def discovery_cache_policy(request: Request, call_next):
+    """Permission decisions are current reads, never reusable cached responses.
+
+    Cover handled errors as well as successes so an earlier allowed response or
+    a temporary denial cannot become a cached substitute for the next check.
+    """
+    response = await call_next(request)
+    if request.url.path == "/v1/events" or request.url.path.startswith("/v1/events/"):
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["CDN-Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 class SourceContext(BaseModel):
