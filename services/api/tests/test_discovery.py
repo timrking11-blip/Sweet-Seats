@@ -62,6 +62,21 @@ def test_duplicate_mapped_credit_is_rejected_before_unresolved_identity(tmp_path
         store.seed(data, NOW)
 
 
+def test_unmapped_venue_is_rejected_without_partial_write(tmp_path: Path) -> None:
+    store = FixtureStore(tmp_path / "discovery.json")
+    store.seed(fixture(), NOW)
+    before = store.read()
+    broken = fixture()
+    for batch in broken["batches"]:
+        batch["logical_key"] += "-new"
+    broken["batches"][-1]["records"][-1]["venue_vendor_id"] = "missing"
+
+    with pytest.raises(DiscoveryError, match="unresolved_venue_identity"):
+        store.seed(broken, NOW)
+
+    assert store.read() == before
+
+
 def test_permission_withheld_unresolved_only_feed_is_blocked(tmp_path: Path) -> None:
     data = fixture()
     for source in data["sources"]:
