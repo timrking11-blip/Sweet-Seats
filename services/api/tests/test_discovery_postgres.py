@@ -24,6 +24,17 @@ DSN = os.environ.get("SWEET_SEATS_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not DSN, reason="requires disposable local PostgreSQL DSN")
 
 
+def test_unresolved_observations_persist(pg_store, tmp_path):
+    store, fixture = pg_store
+    fixture["batches"][0]["records"][0]["performers"][0]["vendor_artist_id"] = "unknown"
+    baseline = FixtureStore(tmp_path / "events.json")
+    expected = baseline.seed(fixture, NOW)
+
+    assert store.seed(fixture, NOW) == expected
+    assert store.read()["unresolved"] == expected["unresolved"]
+    assert store.feed(NOW) == baseline.feed(NOW)
+
+
 def test_persistence_parity_replay_restart_and_digest_report(pg_store, tmp_path):
     store, fixture = pg_store
     baseline = FixtureStore(tmp_path / "events.json")
@@ -79,7 +90,7 @@ def test_validation_and_database_failure_rollback(pg_store, monkeypatch):
     broken = copy.deepcopy(fixture)
     for b in broken["batches"]:
         b["logical_key"] += "-new"
-    broken["batches"][-1]["records"][-1]["venue_vendor_id"] = "missing"
+    broken["batches"][-1]["records"][-1]["status"] = "invalid"
     with pytest.raises(DiscoveryError):
         store.seed(broken, NOW)
     assert store.read() == before
