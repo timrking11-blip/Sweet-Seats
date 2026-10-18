@@ -136,6 +136,18 @@ run_control "provider value column added to a user table" \
   "FAIL user tables have unreviewed columns: artist_follows.last_seen_price_minor" "$USER_TEST" \
   "alter table public.artist_follows add column last_seen_price_minor integer;"
 
+run_control "outcomes recordable without outcome consent" \
+  "FAIL user A recorded an outcome without outcome consent" "$USER_TEST" \
+  "" yes "/and profile.outcome_consent_at is not null/d"
+
+run_control "alerts readable by every signed-in user" \
+  "FAIL user A reads 2 alerts rows" "$USER_TEST" \
+  "create policy leak on public.alerts for select to authenticated using (true);"
+
+run_control "provider title column added to the alert outbox" \
+  "FAIL user tables have unreviewed columns: alerts.event_title" "$USER_TEST" \
+  "alter table public.alerts add column event_title text;"
+
 echo "${count} negative controls, ${failures} not caught"
 [ "$failures" -eq 0 ]
 
