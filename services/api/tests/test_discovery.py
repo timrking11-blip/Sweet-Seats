@@ -62,6 +62,21 @@ def test_duplicate_mapped_credit_is_rejected_before_unresolved_identity(tmp_path
         store.seed(data, NOW)
 
 
+def test_unmapped_venue_is_rejected_without_partial_write(tmp_path: Path) -> None:
+    store = FixtureStore(tmp_path / "discovery.json")
+    store.seed(fixture(), NOW)
+    before = store.read()
+    broken = fixture()
+    for batch in broken["batches"]:
+        batch["logical_key"] += "-new"
+    broken["batches"][-1]["records"][-1]["venue_vendor_id"] = "missing"
+
+    with pytest.raises(DiscoveryError, match="unresolved_venue_identity"):
+        store.seed(broken, NOW)
+
+    assert store.read() == before
+
+
 def test_permission_withheld_unresolved_only_feed_is_blocked(tmp_path: Path) -> None:
     data = fixture()
     for source in data["sources"]:
@@ -75,3 +90,36 @@ def test_permission_withheld_unresolved_only_feed_is_blocked(tmp_path: Path) -> 
     assert feed["events"] == []
     assert feed["unresolved"] == []
     assert feed["status"] == "blocked"
+
+
+def test_lead_time_report_credits_the_first_source_and_measures_lag(tmp_path: Path) -> None:
+    from app.discovery import lead_time_report
+
+    data = fixture()
+    venue_batch = next(b for b in data["batches"] if b["logical_key"].startswith("demo-venue"))
+    shared = next(r for r in venue_batch["records"] if r["vendor_event_id"] == "venue-202")
+    shared["observed_at"] = shared["available_at"] = "2026-10-18T06:55:00Z"
+    later = datetime(2026, 10, 18, 7, 30, tzinfo=UTC)
+    state = FixtureStore(tmp_path / "discovery.json").seed(data, later)
+
+    report = lead_time_report(state, later)
+    by_name = {s["name"]: s for s in report["sources"]}
+    assert report["events"] == 3
+    artist, venue = by_name["Synthetic artist calendar"], by_name["Synthetic venue calendar"]
+    assert (artist["events_seen"], artist["events_first"], artist["shared_events"]) == (2, 2, 1)
+    assert artist["median_lag_minutes"] == 0
+    assert (venue["events_seen"], venue["events_first"]) == (2, 1)
+    assert venue["median_lag_minutes"] == 5
+
+
+def test_lead_time_report_ties_and_revoked_sources(tmp_path: Path) -> None:
+    from app.discovery import lead_time_report
+
+    state = FixtureStore(tmp_path / "discovery.json").seed(fixture(), NOW)
+    report = lead_time_report(state, NOW)
+    assert all(s["events_first"] == s["events_seen"] for s in report["sources"])
+
+    venue = next(s for s in state["sources"].values() if s["name"] == "Synthetic venue calendar")
+    venue["permission"]["revoked_at"] = "2026-10-18T06:59:00Z"
+    names = {s["name"] for s in lead_time_report(state, NOW)["sources"]}
+    assert names == {"Synthetic artist calendar"}

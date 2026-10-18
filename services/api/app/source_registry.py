@@ -1,4 +1,4 @@
-"""Planned provider sources (SS-ADR-003 deny-by-default source permissions).
+"""Planned provider sources (SS-ADR-004 deny-by-default source permissions).
 
 A registry entry records intent and known terms constraints. It is not activation:
 every permission use stays false until the owner records a separate approval with

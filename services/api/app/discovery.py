@@ -50,16 +50,24 @@ def identifier(value: str) -> str:
 
 
 def permitted(source: dict, use: str, now: datetime) -> bool:
-    """Distinct uses; unknown, expired, future or revoked grants fail closed."""
+    """Distinct uses; unknown, expired, future or revoked grants fail closed.
+
+    Mirrors public.source_use_is_permitted; tests/test_permission_parity.py holds the
+    two to the same cases. A grant applies within [approved_at, revoked_at/expires_at).
+    """
     p = source.get("permission", {})
+
+    def present(value: object) -> bool:
+        return isinstance(value, str) and bool(value.strip())
+
     try:
         return bool(
             use in USES
-            and source.get("access_status") == "approved"
+            and source.get("access_status") in {"approved", "active"}
             and p.get("uses", {}).get(use) is True
-            and p.get("evidence_ref")
-            and p.get("terms_version")
-            and not p.get("revoked_at")
+            and present(p.get("evidence_ref"))
+            and present(p.get("terms_version"))
+            and (not p.get("revoked_at") or now < timestamp(p["revoked_at"]))
             and timestamp(p["approved_at"]) <= now < timestamp(p["expires_at"])
         )
     except (KeyError, DiscoveryError):
@@ -132,6 +140,9 @@ def normalize(record: dict, source: dict, identities: dict) -> dict:
     try:
         venue_id = source["venue_mappings"][record["venue_vendor_id"]]
         venue = identities["venues"][identifier(venue_id)]
+    except (KeyError, TypeError) as exc:
+        raise DiscoveryError("unresolved_venue_identity") from exc
+    try:
         performers = []
         for credit in record["performers"]:
             if set(credit) != {"vendor_artist_id", "role", "billing_order"}:
@@ -432,6 +443,44 @@ def project_feed(state: dict, now: datetime) -> dict:
             "unresolved": sorted(unresolved, key=lambda r: r["source_record_id"])}
 
 
+def lead_time_report(state: dict, now: datetime) -> dict:
+    """Which source makes each event knowable first (SS-DATA-0.1 available_at).
+
+    Internal measurement for the Phase 3 question "do official monitors beat the
+    listing APIs?". Only stored, reconciled observations whose source still permits
+    derived retention count; unresolved records have no canonical event to compare.
+    """
+    first_by_event: dict[str, dict[str, datetime]] = {}
+    for record in state["records"].values():
+        source = state["sources"][record["source_id"]]
+        if (not permitted(source, "derived_retention", now)
+                or record["permission_id"] != source["permission"]["permission_id"]):
+            continue
+        seen = first_by_event.setdefault(record["event_id"], {})
+        available = timestamp(record["available_at"])
+        if record["source_id"] not in seen or available < seen[record["source_id"]]:
+            seen[record["source_id"]] = available
+    totals = {}
+    for seen in first_by_event.values():
+        earliest = min(seen.values())
+        for source_id, available in seen.items():
+            row = totals.setdefault(source_id, {"events_seen": 0, "events_first": 0, "lags": []})
+            row["events_seen"] += 1
+            row["events_first"] += available == earliest  # Ties count as first for each.
+            if len(seen) > 1:
+                row["lags"].append((available - earliest).total_seconds() / 60)
+    sources = []
+    for source_id, row in sorted(totals.items()):
+        lags = sorted(row["lags"])
+        middle = len(lags) // 2
+        median = None if not lags else (
+            lags[middle] if len(lags) % 2 else (lags[middle - 1] + lags[middle]) / 2)
+        sources.append({"source_id": source_id, "name": state["sources"][source_id]["name"],
+                        "events_seen": row["events_seen"], "events_first": row["events_first"],
+                        "shared_events": len(lags), "median_lag_minutes": median})
+    return {"basis": "available_at", "events": len(first_by_event), "sources": sources}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
@@ -448,6 +497,7 @@ def main() -> None:
                           "records": len(result["records"]),
                           "unresolved": len(result.get("unresolved", {})),
                           "provider_network_calls": 0,
+                          "lead_times": lead_time_report(result, datetime.now(UTC)),
                           "runs": [{k: r[k] for k in ("source_id", "logical_key", "digest",
                                    "status", "item_count")} for _, r in sorted(result["runs"].items())]}))
     except (DiscoveryError, OSError, ValueError, KeyError, TypeError) as exc:

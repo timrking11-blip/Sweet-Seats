@@ -88,6 +88,72 @@ def test_unknown_display_rights_hide_list_and_detail(discovery_client):
     assert client.get("/v1/events/" + event_id).status_code == 404
 
 
+@pytest.mark.parametrize("transition", ["revoked", "expired"])
+def test_previously_allowed_response_cannot_replace_current_permission_check(
+    discovery_client, transition
+):
+    client, store, fixture = discovery_client
+    # Exercise clock expiry without a database write at read time.
+    expires = NOW + timedelta(minutes=1)
+    for source in fixture["sources"]:
+        source["permission"]["expires_at"] = expires.isoformat()
+    store.seed(fixture, NOW)
+    initial = client.get("/v1/events")
+    event = initial.json()["events"][0]
+    path = "/v1/events/" + event["event_id"]
+    assert client.get(path).status_code == 200
+    assert "no-store" in initial.headers["cache-control"]
+
+    if transition == "revoked":
+        for source in fixture["sources"]:
+            source["permission"]["revoked_at"] = NOW.isoformat()
+        # A permission-only revision must not replay a previously collected
+        # payload as a newly skipped run under the same immutable logical key.
+        fixture["batches"] = []
+        store.seed(fixture, NOW)
+    else:
+        app.dependency_overrides[discovery_now] = lambda: expires
+
+    # Even conditional requests must run projection again, not return 304 for
+    # previously visible data. No ETag/Last-Modified validator is issued.
+    conditional = {"If-None-Match": '"previously-allowed"',
+                   "If-Modified-Since": "Sun, 18 Oct 2026 07:00:00 GMT"}
+    blocked = client.get("/v1/events", headers=conditional)
+    missing = client.get(path, headers=conditional)
+    assert blocked.status_code == 200
+    assert blocked.json()["status"] == "blocked"
+    assert blocked.json()["events"] == []
+    assert missing.status_code == 404
+    assert event["title"] not in missing.text
+    for response in (initial, blocked, missing):
+        assert response.headers["cache-control"] == "private, no-store, max-age=0"
+        assert response.headers["cdn-cache-control"] == "no-store"
+        assert "etag" not in response.headers
+        assert "last-modified" not in response.headers
+
+
+def test_success_and_handled_error_responses_are_not_cacheable(discovery_client):
+    client, store, fixture = discovery_client
+    unseeded = client.get("/v1/events")
+    assert unseeded.status_code == 503
+    store.seed(fixture, NOW)
+    feed = client.get("/v1/events")
+    detail = client.get("/v1/events/" + feed.json()["events"][0]["event_id"])
+    missing = client.get("/v1/events/00000000-0000-4000-8000-000000000000")
+    invalid = client.get("/v1/events/not-a-uuid")
+    disallowed = client.post("/v1/events", json={})
+    assert [r.status_code for r in (feed, detail, missing, invalid, disallowed)] == [
+        200, 200, 404, 422, 405
+    ]
+    for response in (unseeded, feed, detail, missing, invalid, disallowed):
+        assert response.headers["cache-control"] == "private, no-store, max-age=0"
+        assert response.headers["cdn-cache-control"] == "no-store"
+        assert response.headers["pragma"] == "no-cache"
+        assert response.headers["expires"] == "0"
+    # The policy is scoped to discovery content, not unrelated service routes.
+    assert "cache-control" not in client.get("/health").headers
+
+
 @pytest.mark.parametrize("outcome,status", [("empty", "empty"), ("failed", "unavailable")])
 def test_empty_and_failed_remain_distinct_through_api(discovery_client, outcome, status):
     client, store, fixture = discovery_client

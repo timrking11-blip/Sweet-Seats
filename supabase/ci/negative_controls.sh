@@ -114,6 +114,11 @@ run_control "expiry boundary made inclusive" \
   "FAIL expiry exactly at as_of is denied" "$PERMISSIONS_TEST" \
   "" yes "s/permission.expires_at > as_of/permission.expires_at >= as_of/"
 
+# Source-permission evidence.
+run_control "approval evidence no longer required" \
+  "FAIL empty evidence is denied" "$PERMISSIONS_TEST" \
+  "" yes "/btrim(permission.evidence_note) <> ''/d"
+
 echo "${count} negative controls, ${failures} not caught"
 [ "$failures" -eq 0 ]
 

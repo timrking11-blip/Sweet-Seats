@@ -109,6 +109,21 @@ begin
   perform pg_temp.expect('expiry exactly at as_of is denied',
     public.source_use_is_permitted(s, 'collect', t), false);
 
+  -- Approval evidence (SS-DATA-0.1: approval evidence required).
+  s := pg_temp.permission_case('evidence-empty', 'approved', past, null, null);
+  update public.source_permissions set evidence_note = '  ' where source_id = s;
+  perform pg_temp.expect('empty evidence is denied',
+    public.source_use_is_permitted(s, 'collect', t), false);
+
+  s := pg_temp.permission_case('terms-empty', 'approved', past, null, null);
+  update public.source_permissions set terms_version = '' where source_id = s;
+  perform pg_temp.expect('empty terms version is denied',
+    public.source_use_is_permitted(s, 'collect', t), false);
+
+  -- Status vocabulary shared with the Python contract.
+  perform pg_temp.expect('rescheduled is a valid event status',
+    'rescheduled'::text = any (enum_range(null::public.event_status)::text[]), true);
+
   -- Source status gate.
   s := pg_temp.permission_case('source-planned', 'planned', past, null, null);
   perform pg_temp.expect('planned source is denied despite a valid permission',
