@@ -10,10 +10,10 @@ export default function Home() {
       <span className="demo-label">LOCAL DISCOVERY DEMO</span>
     </nav>
     <section className="hero" id="top">
-      <div className="hero-copy"><p className="eyebrow">NEW YORK � LIVE MUSIC</p>
+      <div className="hero-copy"><p className="eyebrow">NEW YORK · LIVE MUSIC</p>
         <h1>Catch the nights<br />you&apos;d hate to miss.</h1>
         <p className="hero-text">Small rooms. Big nights. Find your next show, with a clear trail back to where every detail came from.</p>
-        <div className="hero-actions"><a className="primary button-link" href="#discover-title">Explore the demo <span aria-hidden="true">?</span></a>
+        <div className="hero-actions"><a className="primary button-link" href="#discover-title">Explore the demo <span aria-hidden="true">↗</span></a>
           <a className="secondary button-link" href="#about-demo">About this preview</a></div>
       </div>
       <div className="hero-art" aria-hidden="true"><div className="orb orb-one" /><div className="orb orb-two" /><div className="orb orb-three" />
@@ -30,7 +30,6 @@ export default function Home() {
     <section className="promise" id="about-demo"><div><p className="eyebrow">BUILT ON RECEIPTS</p><h2>Every detail<br />has a source.</h2></div>
       <div className="promise-copy"><p>This local preview follows synthetic source records through permission checks, event matching, storage, and the event feed.</p>
         <p>Artist follows, saved events, and durable alerts are next. Ticket pricing and buy/wait advice require separately licensed data and validation.</p></div></section>
-    <footer><span>Sweet Seats � Find your next favorite night.</span><span>Demo data only � Discovery first</span></footer>
+    <footer><span>Sweet Seats · Find your next favorite night.</span><span>Demo data only · Discovery first</span></footer>
   </main>;
 }
-

@@ -181,7 +181,10 @@ def ingest(state: dict, fixture: dict, now: datetime) -> dict:
         source = sources[batch["source_id"]]
         logical_key = _text(batch["logical_key"])
         run_key = source["source_id"] + ":" + logical_key
-        fingerprint = digest(batch)
+        allowed = all(permitted(source, use, now) for use in
+                      ("collect", "raw_retention", "derived_retention"))
+        # A skipped run retains only its operational identity, not a payload-derived hash.
+        fingerprint = digest(batch) if allowed else digest([source["source_id"], logical_key, "skipped"])
         if run_key in result["runs"]:
             if result["runs"][run_key]["digest"] != fingerprint:
                 raise DiscoveryError("changed_batch_at_same_logical_key")
@@ -191,8 +194,6 @@ def ingest(state: dict, fixture: dict, now: datetime) -> dict:
             raise DiscoveryError("invalid_collection_outcome")
         if (outcome == "succeeded") != bool(batch["records"]):
             raise DiscoveryError("collection_outcome_record_mismatch")
-        allowed = all(permitted(source, use, now) for use in
-                      ("collect", "raw_retention", "derived_retention"))
         run = {"source_id": source["source_id"], "logical_key": logical_key,
                "status": outcome if allowed else "skipped", "digest": fingerprint,
                "item_count": 0, "finished_at": now.isoformat(),
@@ -283,6 +284,7 @@ class FixtureStore:
                     and record["permission_id"] == source["permission"]["permission_id"]):
                 grouped.setdefault(record["event_id"], []).append(record)
         events = []
+        review_count = 0
         for event_id, records in grouped.items():
             records.sort(key=lambda r: (timestamp(r["available_at"]), r["source_record_id"]))
             # Historical observations remain stored, but cannot resurrect removed credits.
@@ -290,6 +292,13 @@ class FixtureStore:
             records = sorted(newest_by_source.values(), key=lambda r: (
                 timestamp(r["available_at"]), r["source_record_id"]))
             latest = records[-1]
+            contemporaneous = [r for r in records if timestamp(r["available_at"])
+                               == timestamp(latest["available_at"])]
+            fact_keys = ("venue_id", "starts_at", "local_date", "status")
+            if len({digest({k: r[k] for k in fact_keys}) for r in contemporaneous}) > 1:
+                # Preserve conflicting observations but do not invent a source winner.
+                review_count += 1
+                continue
             # Only currently permitted evidence contributes to this projection.
             credits = {(p["artist_id"], p["role"]): p for r in records for p in r["performers"]}
             performers = [{**p, "name": state["identities"]["artists"][p["artist_id"]]["name"]}
@@ -321,11 +330,13 @@ class FixtureStore:
         status = "ready" if events else "empty"
         if any(r["status"] == "failed" for r in runs):
             status = "partial" if events else "unavailable"
+        elif not events and review_count:
+            status = "review_required"
         elif not events and (state["records"] or any(r["status"] == "skipped" for r in runs)):
             status = "blocked"
         return {"mode": "synthetic", "status": status, "generated_at": now.isoformat(),
                 "freshness_rule": "Demo only: stale after 24 hours; not a production SLA.",
-                "events": events, "collections": runs}
+                "events": events, "collections": runs, "review_count": review_count}
 
 
 def main() -> None:
@@ -344,4 +355,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

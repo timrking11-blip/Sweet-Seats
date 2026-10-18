@@ -24,7 +24,8 @@ export type DiscoveryEvent = {
 
 type Feed = {
   mode: "synthetic";
-  status: "ready" | "empty" | "partial" | "unavailable" | "blocked";
+  status: "ready" | "empty" | "partial" | "unavailable" | "blocked" | "review_required";
+  review_count: number;
   events: DiscoveryEvent[];
   collections: { name: string; status: string; finished_at: string; item_count: number }[];
 };
@@ -77,7 +78,7 @@ function DateBlock({ event }: { event: DiscoveryEvent }) {
 export function DiscoveryFeed() {
   const { result, retry } = useDiscovery<Feed>("events");
   const [query, setQuery] = useState("");
-  if (result.state === "loading") return <div className="feed-state" role="status" aria-busy="true">Loading the local event feed.</div>;
+  if (result.state === "loading") return <div className="feed-state" role="status" aria-busy="true">Loading the local event feed…</div>;
   if (result.state === "error") return <Failure retry={retry} />;
   const { data } = result;
   const matches = data.events.filter((event) =>
@@ -93,8 +94,9 @@ export function DiscoveryFeed() {
     {data.status === "partial" && <p className="data-warning" role="status">A source failed. Previously observed events remain available; their timestamps have not been refreshed.</p>}
     {data.status === "unavailable" && <p className="data-warning" role="alert">Source unavailable. This is a collection failure, not evidence of no events or sold-out tickets.</p>}
     {data.status === "blocked" && <p className="data-warning" role="alert">Events are withheld because source permissions do not allow display or retention.</p>}
-    <p className="result-count" role="status">{matches.length} demo {matches.length === 1 ? "night" : "nights"} � NYC area</p>
-    {matches.length === 0 && !["unavailable", "blocked"].includes(data.status) && <div className="feed-state">
+    {data.review_count > 0 && <p className="data-warning" role="status">{data.review_count} event(s) withheld for conflicting source facts. Matching needs review.</p>}
+    <p className="result-count" role="status">{matches.length} demo {matches.length === 1 ? "night" : "nights"} · NYC area</p>
+    {matches.length === 0 && !["unavailable", "blocked", "review_required"].includes(data.status) && <div className="feed-state">
       <h3>{query ? "Nothing matches this search." : "No events returned."}</h3>
       <p>{query ? "Try another artist, venue, or neighborhood." : "Collection succeeded without events. That does not mean tickets are sold out."}</p>
     </div>}
@@ -105,15 +107,15 @@ export function DiscoveryFeed() {
         <div className="event-main">
           <DateBlock event={event} />
           <div><h3><Link href={`/events/${event.event_id}`}>{event.title}</Link></h3>
-            <p>{event.venue.name}</p><p className="muted">{event.venue.neighborhood} � {eventTime(event)}</p></div>
+            <p>{event.venue.name}</p><p className="muted">{event.venue.neighborhood} · {eventTime(event)}</p></div>
         </div>
         <div className="event-evidence"><span>{event.sources.length} synthetic source {event.sources.length === 1 ? "record" : "records"}</span>
           <time dateTime={event.observed_at}>Observed {observedTime(event.observed_at)}</time>
-          <Link href={`/events/${event.event_id}`}>Explore this night <span aria-hidden="true">?</span></Link></div>
+          <Link href={`/events/${event.event_id}`}>Explore this night <span aria-hidden="true">↗</span></Link></div>
       </article>)}
     </div>
     <details className="collection-details"><summary>Source collection results</summary>
-      <ul>{data.collections.map((collection, i) => <li key={i}>{collection.name}: {collection.status} � {collection.item_count} records � {observedTime(collection.finished_at)}</li>)}</ul>
+      <ul>{data.collections.map((collection, i) => <li key={i}>{collection.name}: {collection.status} · {collection.item_count} records · {observedTime(collection.finished_at)}</li>)}</ul>
     </details>
   </>;
 }
@@ -126,15 +128,15 @@ function Failure({ retry }: { retry: () => void }) {
 
 export function EventDetail({ eventId }: { eventId: string }) {
   const { result, retry } = useDiscovery<{ mode: "synthetic"; event: DiscoveryEvent }>(`events/${encodeURIComponent(eventId)}`);
-  if (result.state === "loading") return <div className="feed-state" role="status">Loading event details.</div>;
+  if (result.state === "loading") return <div className="feed-state" role="status">Loading event details…</div>;
   if (result.state === "error") return <Failure retry={retry} />;
   const event = result.data.event;
   return <article className="event-detail">
-    <p className="eyebrow">SYNTHETIC EVENT � {event.status.toUpperCase()}</p>
+    <p className="eyebrow">SYNTHETIC EVENT · {event.status.toUpperCase()}</p>
     <h1>{event.title}</h1>
-    <p className="detail-location">{event.venue.name} � {event.venue.neighborhood}</p>
-    <p><time dateTime={event.local_date}>{event.local_date}</time> � {eventTime(event)}</p>
-    <p className={`data-warning ${event.stale ? "" : "recent"}`}>{event.stale ? "Stale observation. Recheck an official source before making plans." : "Recent observation under the demo's 24-hour freshness rule."}</p>
+    <p className="detail-location">{event.venue.name} · {event.venue.neighborhood}</p>
+    <p><time dateTime={event.local_date}>{event.local_date}</time> · {eventTime(event)}</p>
+    <p className={`data-warning ${event.stale ? "" : "recent"}`}>{event.stale ? "Stale observation. Recheck an official source before making plans." : "Recent observation under the demo’s 24-hour freshness rule."}</p>
     <section aria-labelledby="lineup-title"><h2 id="lineup-title">The lineup</h2>
       <ul className="lineup">{event.performers.map((artist) => <li key={`${artist.artist_id}:${artist.role}`}><strong>{artist.name}</strong><span>{artist.role}</span></li>)}</ul>
     </section>
@@ -150,4 +152,3 @@ export function EventDetail({ eventId }: { eventId: string }) {
       <button className="secondary" disabled>No ticket link in this demo</button></section>
   </article>;
 }
-
