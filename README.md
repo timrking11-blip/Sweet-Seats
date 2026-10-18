@@ -4,13 +4,17 @@ NYC-area live music discovery and, once licensed comparable offer history suppor
 
 ## Current state — 2026-10-18
 
-The inspected private upstream `main` at `da735d525e1ef3a27a6544e2a058b06782084b97`
-already contains the synthetic fixture → reconciliation → FastAPI → mobile PWA slice
-and an offline-tested Ticketmaster adapter. Live providers, notifications, deployment,
-and forecasting remain disabled. This local amendment adds transactional PostgreSQL
-persistence using `psycopg[binary]==3.2.13`; it does not apply remote migrations.
-See the [discovery contract](docs/contracts/discovery-demo-v0.1.md) and
-[validation report](docs/VALIDATION-discovery-postgres.md).
+The repository is private. Verified base `da735d5` includes the merged offline research
+contract, fixture-backed discovery feed/API, disabled Discovery adapter, permission/RLS
+tests and dependency fixes through PR #12. This branch completes unresolved-identity
+review, date/status validation, pagination and rendered feed tests. The current
+amendment adds transactional local PostgreSQL persistence; it does not apply remote
+migrations. Nothing is deployed and no provider is activated.
+
+Run the [fixture-to-feed quickstart](docs/contracts/discovery-demo-v0.1.md#run-locally).
+See the [audience-provider evaluation](docs/audience-provider-evaluation.md); the
+Soundcharts-first evaluation recommendation is pending approval. Neither audience
+provider is integrated.
 
 - [Notion project and architecture index](https://app.notion.com/p/3f57ecee36a980dfbc14eb53a52e3d0f)
 - [00 — Product Charter & Phase 0](https://app.notion.com/p/3f57ecee36a981d09ddfcb8d962654a4?pvs=204)
@@ -87,7 +91,7 @@ Candidate thresholds (15% and $25 total-order change in 60 minutes) require back
 
 ## Next iteration
 
-The selected stack is Next.js/TypeScript PWA on Vercel, Supabase PostgreSQL/Auth, Render API/workers, and Cloudflare R2 when its storage gate opens. Review the local PostgreSQL amendment and validation evidence; then confirm the first artist/venue sample, NYC catchment and notification channel. Provider activation and runtime provisioning remain separate owner approvals.
+The selected stack is Next.js/TypeScript PWA on Vercel, Supabase PostgreSQL/Auth, Render API/workers, and Cloudflare R2 when its storage gate opens. Review the local PostgreSQL amendment and validation evidence, including transactional replay/recovery, before connecting production storage. Confirm the first artist/venue sample, NYC catchment and notification channel. Provider activation and runtime provisioning remain separate owner approvals.
 
 Current product layout: `apps/web`, `services/api`, `supabase/migrations`, `tests/fixtures`, `jobs`, `adapters` and `docs`. Future delivery adds provider adapters, durable jobs, model evaluation and infrastructure manifests only as their gates open.
 
@@ -110,7 +114,6 @@ python3 -m jobs.linear_research --fixture tests/fixtures/research/hourly.json
 ```
 
 See [architecture reconciliation](docs/linear-research-agent.md) for verified branch facts, deferred integrations, source boundaries and activation gates. Discovery remains the first consumer milestone.
-
 
 ## Local PostgreSQL discovery
 

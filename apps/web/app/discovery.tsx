@@ -12,7 +12,7 @@ export type DiscoveryEvent = {
   local_date: string;
   timezone: string;
   time_tba: boolean;
-  status: "scheduled" | "postponed" | "cancelled" | "unknown";
+  status: "scheduled" | "rescheduled" | "postponed" | "cancelled" | "unknown";
   observed_at: string;
   available_at: string;
   fresh_until: string;
@@ -22,16 +22,18 @@ export type DiscoveryEvent = {
   ticket_notice: string;
 };
 
-type Feed = {
+export type Feed = {
   mode: "synthetic";
   status: "ready" | "empty" | "partial" | "unavailable" | "blocked" | "review_required";
   review_count: number;
+  unresolved: { source_record_id: string; title: string; reason: string }[];
+  pagination: { limit: number; offset: number; total: number; next_offset: number | null };
   events: DiscoveryEvent[];
   collections: { name: string; status: string; finished_at: string; item_count: number }[];
 };
 
 // "missing" (404) means absent or withheld from display; it is not a provider failure.
-type Remote<T> = { state: "loading" } | { state: "error" } | { state: "missing" } | { state: "ready"; data: T };
+export type Remote<T> = { state: "loading" } | { state: "error" } | { state: "missing" } | { state: "ready"; data: T };
 
 function useDiscovery<T>(path: string) {
   const [result, setResult] = useState<Remote<T>>({ state: "loading" });
@@ -81,7 +83,14 @@ function DateBlock({ event }: { event: DiscoveryEvent }) {
 }
 
 export function DiscoveryFeed() {
-  const { result, retry } = useDiscovery<Feed>("events");
+  const [offset, setOffset] = useState(0);
+  const { result, retry } = useDiscovery<Feed>(`events?limit=100&offset=${offset}`);
+  return <DiscoveryFeedView result={result} retry={retry} offset={offset} setOffset={setOffset} />;
+}
+
+export function DiscoveryFeedView({ result, retry, offset = 0, setOffset = () => {} }: {
+  result: Remote<Feed>; retry: () => void; offset?: number; setOffset?: (offset: number) => void;
+}) {
   const [query, setQuery] = useState("");
   if (result.state === "loading") return <div className="feed-state" role="status" aria-busy="true">Loading the local event feed…</div>;
   if (result.state !== "ready") return <Failure retry={retry} />;
@@ -91,7 +100,7 @@ export function DiscoveryFeed() {
       .join(" ").toLowerCase().includes(query.trim().toLowerCase()));
   return <>
     <div className="feed-tools">
-      <label htmlFor="event-search">Find an artist, venue, or neighborhood
+      <label htmlFor="event-search">Find an artist, venue, or neighborhood on this page
         <input id="event-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Try Violet Static or Brooklyn" />
       </label>
       <button className="secondary" onClick={retry}>Refresh feed</button>
@@ -99,7 +108,10 @@ export function DiscoveryFeed() {
     {data.status === "partial" && <p className="data-warning" role="status">A source failed. Previously observed events remain available; their timestamps have not been refreshed.</p>}
     {data.status === "unavailable" && <p className="data-warning" role="alert">Source unavailable. This is a collection failure, not evidence of no events or sold-out tickets.</p>}
     {data.status === "blocked" && <p className="data-warning" role="alert">Events are withheld because source permissions do not allow display or retention.</p>}
-    {data.review_count > 0 && <p className="data-warning" role="status">{data.review_count} event(s) withheld for conflicting source facts. Matching needs review.</p>}
+    {data.review_count > 0 && <p className="data-warning" role="status">{data.review_count} source record(s) or event(s) withheld for unresolved identities or conflicting facts. Matching needs review.</p>}
+    {data.unresolved.length > 0 && <details className="collection-details"><summary>Unresolved identities</summary>
+      <ul>{data.unresolved.map((record) => <li key={record.source_record_id}>{record.title}: identity crosswalk needs review; no match was guessed.</li>)}</ul>
+    </details>}
     <p className="result-count" role="status">{matches.length} demo {matches.length === 1 ? "night" : "nights"} · NYC area</p>
     {matches.length === 0 && !["unavailable", "blocked", "review_required"].includes(data.status) && <div className="feed-state">
       <h3>{query ? "Nothing matches this search." : "No events returned."}</h3>
@@ -112,6 +124,7 @@ export function DiscoveryFeed() {
         <div className="event-main">
           <DateBlock event={event} />
           <div><h3><Link href={`/events/${event.event_id}`}>{event.title}</Link></h3>
+            <p>{event.performers.map((artist) => artist.name).join(" · ")}</p>
             <p>{event.venue.name}</p><p className="muted">{event.venue.neighborhood} · {eventTime(event)}</p></div>
         </div>
         <div className="event-evidence"><span>{event.sources.length} synthetic source {event.sources.length === 1 ? "record" : "records"}</span>
@@ -119,6 +132,11 @@ export function DiscoveryFeed() {
           <Link href={`/events/${event.event_id}`}>Explore this night <span aria-hidden="true">↗</span></Link></div>
       </article>)}
     </div>
+    <nav aria-label="Event pages" className="feed-tools">
+      <button className="secondary" disabled={offset === 0} onClick={() => { setQuery(""); setOffset(Math.max(0, offset - 100)); }}>Previous page</button>
+      <span>{data.pagination.total} total demo events</span>
+      <button className="secondary" disabled={data.pagination.next_offset === null} onClick={() => { setQuery(""); setOffset(data.pagination.next_offset ?? 0); }}>Next page</button>
+    </nav>
     <details className="collection-details"><summary>Source collection results</summary>
       <ul>{data.collections.map((collection, i) => <li key={i}>{collection.name}: {collection.status} · {collection.item_count} records · {observedTime(collection.finished_at)}</li>)}</ul>
     </details>
@@ -160,3 +178,4 @@ export function EventDetail({ eventId }: { eventId: string }) {
       <button className="secondary" disabled>No ticket link in this demo</button></section>
   </article>;
 }
+

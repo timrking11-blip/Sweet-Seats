@@ -54,10 +54,10 @@ def test_fixture_date_and_typed_mapping_consistency():
         for k in fixture["identities"]["artists"]
         if k != revised["sources"][0]["artist_mappings"]["Violet Static"]
     )
-    with pytest.raises(DiscoveryError, match="mapping_revision"):
+    with pytest.raises(DiscoveryError, match="identity_crosswalk_revision_requires_review"):
         ingest(first, revised, now)
     fixture["batches"][0]["records"][0]["local_date"] = "2026-11-07"
-    with pytest.raises(DiscoveryError, match="local_date_start_mismatch"):
+    with pytest.raises(DiscoveryError, match="local_date_timezone_mismatch"):
         ingest(empty_state(), fixture, now)
 
 
