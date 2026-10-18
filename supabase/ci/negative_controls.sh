@@ -93,6 +93,14 @@ run_control "Supabase default grants missing" \
   "FAIL premise" "$RLS_TEST" \
   "" no
 
+run_control "RLS disabled on source observations" \
+  "public tables without row level security: source_event_records" "$RLS_TEST" \
+  "alter table public.source_event_records disable row level security;"
+
+run_control "permissive observation policy" \
+  "discovery table has policies: source_event_records" "supabase/tests/discovery_contract_test.sql" \
+  "create policy leak on public.source_event_records for select to anon using (true);"
+
 # Source-permission time window.
 run_control "approval no longer compared with as_of" \
   "FAIL null as_of is denied" "$PERMISSIONS_TEST" \
@@ -108,3 +116,4 @@ run_control "expiry boundary made inclusive" \
 
 echo "${count} negative controls, ${failures} not caught"
 [ "$failures" -eq 0 ]
+

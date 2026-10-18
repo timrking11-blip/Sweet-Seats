@@ -5,7 +5,8 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field, HttpUrl
 
-from .discovery import DiscoveryError, FixtureStore
+from .discovery import DiscoveryError
+from .discovery_postgres import DiscoveryStore, configured_store
 
 app = FastAPI(
     title="Sweet Seats API",
@@ -52,15 +53,18 @@ def discovery_mode() -> dict[str, str]:
     }
 
 
-def discovery_store() -> FixtureStore:
-    return FixtureStore()
+def discovery_store() -> DiscoveryStore:
+    try:
+        return configured_store()
+    except DiscoveryError:
+        raise HTTPException(status_code=503, detail="Local discovery data unavailable.") from None
 
 
 def discovery_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _read_feed(store: FixtureStore, now: datetime) -> dict:
+def _read_feed(store: DiscoveryStore, now: datetime) -> dict:
     try:
         return store.feed(now)
     except (DiscoveryError, KeyError, TypeError, ValueError):
@@ -71,16 +75,17 @@ def _read_feed(store: FixtureStore, now: datetime) -> dict:
 
 
 @app.get("/v1/events")
-def events(store: FixtureStore = Depends(discovery_store), now: datetime = Depends(discovery_now)):
+def events(store: DiscoveryStore = Depends(discovery_store), now: datetime = Depends(discovery_now)):
     return _read_feed(store, now)
 
 
 @app.get("/v1/events/{event_id}")
-def event_detail(event_id: UUID, store: FixtureStore = Depends(discovery_store),
+def event_detail(event_id: UUID, store: DiscoveryStore = Depends(discovery_store),
                  now: datetime = Depends(discovery_now)):
     feed = _read_feed(store, now)
     event = next((e for e in feed["events"] if e["event_id"] == str(event_id)), None)
     if event is None:
         raise HTTPException(status_code=404, detail="Event unavailable or not permitted for display.")
     return {"mode": feed["mode"], "generated_at": feed["generated_at"], "event": event}
+
 

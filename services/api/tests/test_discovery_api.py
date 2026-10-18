@@ -16,13 +16,15 @@ from app.main import app, discovery_now, discovery_store, event_detail, events
 NOW = timestamp("2026-10-18T07:00:00Z")
 
 
-@pytest.fixture
-def discovery_client():
+@pytest.fixture(params=["json", "postgres"])
+def discovery_client(request):
     root = DEFAULT_FIXTURE.parents[3] / ".local" / "tests"
     root.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=root) as directory:
         store = FixtureStore(Path(directory) / "events.json")
         fixture = json.loads(DEFAULT_FIXTURE.read_text(encoding="utf-8"))
+        if request.param == "postgres":
+            store, fixture = request.getfixturevalue("pg_store")
         app.dependency_overrides[discovery_store] = lambda: store
         app.dependency_overrides[discovery_now] = lambda: NOW
         try:
@@ -64,7 +66,7 @@ def test_unseeded_store_is_503_with_redacted_error(discovery_client):
     client, store, _ = discovery_client
     response = client.get("/v1/events")
     assert response.status_code == 503
-    assert str(store.path) not in response.text
+    assert str(getattr(store, "path", "synthetic-secret-canary")) not in response.text
     assert "events" not in response.json()
 
 
@@ -122,3 +124,4 @@ def test_direct_read_handler_does_not_turn_missing_store_into_empty(tmp_path):
     with pytest.raises(HTTPException) as caught:
         events(store=FixtureStore(tmp_path / "missing.json"), now=NOW)
     assert caught.value.status_code == 503
+
