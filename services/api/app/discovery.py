@@ -1,7 +1,8 @@
 """Offline discovery slice (SS-DATA-0.1 / SS-ADR-002, 003, 004).
 
-Only synthetic fixtures are accepted. The JSON store is a single-writer development
-artifact, not a replacement for the canonical PostgreSQL database. No network I/O.
+Only synthetic fixtures are accepted. Reconciliation and feed projection are shared
+by the transactional PostgreSQL adapter and the legacy single-writer JSON adapter.
+No provider I/O is performed.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import tempfile
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid5
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_STORE = ROOT / ".local" / "discovery.json"
@@ -90,8 +92,10 @@ def normalize(record: dict, source: dict, identities: dict) -> dict:
     if record["timezone"] != "America/New_York":
         raise DiscoveryError("unsupported_fixture_timezone")
     date.fromisoformat(record["local_date"])
-    if record["starts_at"] is not None:
-        timestamp(record["starts_at"])
+    if (record["starts_at"] is not None
+            and timestamp(record["starts_at"]).astimezone(ZoneInfo(record["timezone"])).date()
+            != date.fromisoformat(record["local_date"])):
+        raise DiscoveryError("local_date_start_mismatch")
     observed, available = timestamp(record["observed_at"]), timestamp(record["available_at"])
     if observed > available:
         raise DiscoveryError("availability_before_observation")
@@ -158,6 +162,7 @@ def ingest(state: dict, fixture: dict, now: datetime) -> dict:
                 raise DiscoveryError("identity_revision_requires_review")
         result["identities"][kind].update(identities[kind])
     sources = {}
+    permission_ids = set()
     for source in fixture["sources"]:
         if set(source) != {"source_id", "name", "kind", "access_status", "adapter_version",
                            "artist_mappings", "venue_mappings", "permission"}:
@@ -172,7 +177,18 @@ def ingest(state: dict, fixture: dict, now: datetime) -> dict:
             raise DiscoveryError("synthetic_unique_source_required")
         _text(source["name"])
         _text(source["adapter_version"])
-        identifier(source["permission"]["permission_id"])
+        permission_id = identifier(source["permission"]["permission_id"])
+        if permission_id in permission_ids:
+            raise DiscoveryError("duplicate_source_permission")
+        permission_ids.add(permission_id)
+        previous = result["sources"].get(source_id, {})
+        for kind, mapping_field in (("artists", "artist_mappings"), ("venues", "venue_mappings")):
+            for vendor, target in source[mapping_field].items():
+                _text(vendor)
+                if identifier(target) not in result["identities"][kind]:
+                    raise DiscoveryError("unresolved_typed_identity")
+                if vendor in previous.get(mapping_field, {}) and previous[mapping_field][vendor] != target:
+                    raise DiscoveryError("mapping_revision_requires_review")
         sources[source_id] = source
     result["sources"].update(sources)
     for batch in fixture["batches"]:
@@ -276,82 +292,94 @@ class FixtureStore:
             lock.unlink()
 
     def feed(self, now: datetime) -> dict:
-        state = self.read()
-        grouped: dict[str, list[dict]] = {}
-        for record in state["records"].values():
-            source = state["sources"][record["source_id"]]
-            if (all(permitted(source, use, now) for use in ("display", "raw_retention", "derived_retention"))
-                    and record["permission_id"] == source["permission"]["permission_id"]):
-                grouped.setdefault(record["event_id"], []).append(record)
-        events = []
-        review_count = 0
-        for event_id, records in grouped.items():
-            records.sort(key=lambda r: (timestamp(r["available_at"]), r["source_record_id"]))
-            # Historical observations remain stored, but cannot resurrect removed credits.
-            newest_by_source = {(r["source_id"], r["vendor_event_id"]): r for r in records}
-            records = sorted(newest_by_source.values(), key=lambda r: (
-                timestamp(r["available_at"]), r["source_record_id"]))
-            latest = records[-1]
-            contemporaneous = [r for r in records if timestamp(r["available_at"])
-                               == timestamp(latest["available_at"])]
-            fact_keys = ("venue_id", "starts_at", "local_date", "status")
-            if len({digest({k: r[k] for k in fact_keys}) for r in contemporaneous}) > 1:
-                # Preserve conflicting observations but do not invent a source winner.
-                review_count += 1
-                continue
-            # Only currently permitted evidence contributes to this projection.
-            credits = {(p["artist_id"], p["role"]): p for r in records for p in r["performers"]}
-            performers = [{**p, "name": state["identities"]["artists"][p["artist_id"]]["name"]}
-                          for p in sorted(credits.values(), key=lambda p: (p["billing_order"], p["artist_id"]))]
-            observed = max(timestamp(r["observed_at"]) for r in records)
-            fresh_until = observed + timedelta(hours=24)  # DEMO rule, not a production SLA.
-            provenance = [{key: r[key] for key in ("source_id", "source_record_id", "source_url",
-                          "observed_at", "available_at", "permission_id", "adapter_version", "payload_hash")}
-                          | {"name": state["sources"][r["source_id"]]["name"]} for r in records]
-            events.append({"event_id": event_id, "title": latest["title"],
-                           "venue": {"venue_id": latest["venue_id"], **state["identities"]["venues"][latest["venue_id"]]},
-                           "performers": performers, "starts_at": latest["starts_at"],
-                           "local_date": latest["local_date"], "timezone": latest["timezone"],
-                           "time_tba": latest["starts_at"] is None, "status": latest["status"],
-                           "first_seen_at": min(timestamp(r["observed_at"]) for r in records).isoformat(),
-                           "observed_at": observed.isoformat(), "available_at": latest["available_at"],
-                           "fresh_until": fresh_until.isoformat(), "stale": now >= fresh_until,
-                           "ticket_url": None, "ticket_notice": "Synthetic event; no real ticket listing.",
-                           "reconciliation_status": "provisional", "sources": provenance})
-        events.sort(key=lambda e: (e["local_date"], e["starts_at"] or "", e["event_id"]))
-        latest_runs = {}
-        for run in state["runs"].values():
-            prior = latest_runs.get(run["source_id"])
-            if prior is None or timestamp(run["finished_at"]) >= timestamp(prior["finished_at"]):
-                latest_runs[run["source_id"]] = run
-        runs = [{"status": r["status"], "name": state["sources"][r["source_id"]]["name"],
-                 "finished_at": r["finished_at"], "item_count": r["item_count"]}
-                for r in latest_runs.values()]
-        status = "ready" if events else "empty"
-        if any(r["status"] == "failed" for r in runs):
-            status = "partial" if events else "unavailable"
-        elif not events and review_count:
-            status = "review_required"
-        elif not events and (state["records"] or any(r["status"] == "skipped" for r in runs)):
-            status = "blocked"
-        return {"mode": "synthetic", "status": status, "generated_at": now.isoformat(),
-                "freshness_rule": "Demo only: stale after 24 hours; not a production SLA.",
-                "events": events, "collections": runs, "review_count": review_count}
+        return project_feed(self.read(), now)
+
+
+def project_feed(state: dict, now: datetime) -> dict:
+    """Storage-independent, permission-filtered discovery projection."""
+    grouped: dict[str, list[dict]] = {}
+    for record in state["records"].values():
+        source = state["sources"][record["source_id"]]
+        if (all(permitted(source, use, now) for use in ("display", "raw_retention", "derived_retention"))
+                and record["permission_id"] == source["permission"]["permission_id"]):
+            grouped.setdefault(record["event_id"], []).append(record)
+    events = []
+    review_count = 0
+    for event_id, records in grouped.items():
+        records.sort(key=lambda r: (timestamp(r["available_at"]), r["source_record_id"]))
+        first_seen = min(timestamp(r["observed_at"]) for r in records)
+        # Historical observations remain stored, but cannot resurrect removed credits.
+        newest_by_source = {(r["source_id"], r["vendor_event_id"]): r for r in records}
+        records = sorted(newest_by_source.values(), key=lambda r: (
+            timestamp(r["available_at"]), r["source_record_id"]))
+        latest = records[-1]
+        contemporaneous = [r for r in records if timestamp(r["available_at"])
+                           == timestamp(latest["available_at"])]
+        fact_keys = ("venue_id", "starts_at", "local_date", "status")
+        if len({digest({k: r[k] for k in fact_keys}) for r in contemporaneous}) > 1:
+            # Preserve conflicting observations but do not invent a source winner.
+            review_count += 1
+            continue
+        # Only currently permitted evidence contributes to this projection.
+        credits = {(p["artist_id"], p["role"]): p for r in records for p in r["performers"]}
+        performers = [{**p, "name": state["identities"]["artists"][p["artist_id"]]["name"]}
+                      for p in sorted(credits.values(), key=lambda p: (p["billing_order"], p["artist_id"]))]
+        observed = max(timestamp(r["observed_at"]) for r in records)
+        fresh_until = observed + timedelta(hours=24)  # DEMO rule, not a production SLA.
+        provenance = [{key: r[key] for key in ("source_id", "source_record_id", "source_url",
+                      "observed_at", "available_at", "permission_id", "adapter_version", "payload_hash")}
+                      | {"name": state["sources"][r["source_id"]]["name"]} for r in records]
+        events.append({"event_id": event_id, "title": latest["title"],
+                       "venue": {"venue_id": latest["venue_id"], **state["identities"]["venues"][latest["venue_id"]]},
+                       "performers": performers, "starts_at": latest["starts_at"],
+                       "local_date": latest["local_date"], "timezone": latest["timezone"],
+                       "time_tba": latest["starts_at"] is None, "status": latest["status"],
+                       "first_seen_at": first_seen.isoformat(),
+                       "observed_at": observed.isoformat(), "available_at": latest["available_at"],
+                       "fresh_until": fresh_until.isoformat(), "stale": now >= fresh_until,
+                       "ticket_url": None, "ticket_notice": "Synthetic event; no real ticket listing.",
+                       "reconciliation_status": "provisional", "sources": provenance})
+    events.sort(key=lambda e: (e["local_date"], e["starts_at"] or "", e["event_id"]))
+    latest_runs = {}
+    for run in sorted(state["runs"].values(), key=lambda r: (timestamp(r["finished_at"]), r["logical_key"])):
+        prior = latest_runs.get(run["source_id"])
+        if prior is None or timestamp(run["finished_at"]) >= timestamp(prior["finished_at"]):
+            latest_runs[run["source_id"]] = run
+    runs = [{"status": r["status"], "name": state["sources"][r["source_id"]]["name"],
+             "finished_at": r["finished_at"], "item_count": r["item_count"]}
+            for _, r in sorted(latest_runs.items())]
+    status = "ready" if events else "empty"
+    if any(r["status"] == "failed" for r in runs):
+        status = "partial" if events else "unavailable"
+    elif not events and review_count:
+        status = "review_required"
+    elif not events and (state["records"] or any(r["status"] == "skipped" for r in runs)):
+        status = "blocked"
+    return {"mode": "synthetic", "status": status, "generated_at": now.isoformat(),
+            "freshness_rule": "Demo only: stale after 24 hours; not a production SLA.",
+            "events": events, "collections": runs, "review_count": review_count}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
-    parser.add_argument("--store", type=Path, default=DEFAULT_STORE)
+    parser.add_argument("--store", type=Path, default=None,
+                        help="Explicit JSON-only legacy store; otherwise use configured adapter")
     args = parser.parse_args()
     try:
         fixture = json.loads(args.fixture.read_text(encoding="utf-8"))
-        result = FixtureStore(args.store).seed(fixture, datetime.now(UTC))
+        from .discovery_postgres import configured_store
+
+        store = FixtureStore(args.store) if args.store else configured_store()
+        result = store.seed(fixture, datetime.now(UTC))
         print(json.dumps({"synthetic": True, "events": len(result["events"]),
-                          "records": len(result["records"]), "network_calls": 0}))
+                          "records": len(result["records"]), "provider_network_calls": 0,
+                          "runs": [{k: r[k] for k in ("source_id", "logical_key", "digest",
+                                   "status", "item_count")} for _, r in sorted(result["runs"].items())]}))
     except (DiscoveryError, OSError, ValueError, KeyError, TypeError):
         parser.exit(1, "Synthetic ingestion failed; no provider call was made.\n")
 
 
 if __name__ == "__main__":
     main()
+
