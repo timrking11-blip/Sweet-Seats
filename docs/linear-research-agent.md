@@ -2,6 +2,8 @@
 
 Decision SS-ADR-007; contract SS-RESEARCH-0.2. Definition owner: Timothy King. [Full contract](contracts/research-v0.2.md).
 
+Proposed amendment (not yet approved): [SS-RESEARCH-0.3](contracts/research-v0.3.md) replaces Perplexity with the Claude API as the research processor and binds approvals to an execution profile. SS-RESEARCH-0.2 governs until the amendment is recorded in Notion.
+
 ## Verified repository facts
 
 GitHub metadata reports private visibility. Main at 68d08b9a89146271ea67fb7062a6ae450a3dd20e contains only README.md. PR #1 (feat/linear-research-agent) and PR #2 (feat/linear-research-agent-v2) contain competing unmerged scaffolds. The earlier statements "only README" and "code exists" referred to different branches and can both be true. This amendment reconciles PR #2; it is draft, not deployed. PR #1 is a historical alternative, not a second standard to merge.
