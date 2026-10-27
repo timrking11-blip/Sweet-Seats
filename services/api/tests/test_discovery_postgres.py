@@ -136,7 +136,7 @@ def test_unknown_venue_review_item_persists_and_resolves_like_fixture_store(pg_s
     feed = store.feed(NOW)
     assert feed == baseline.feed(NOW)
     assert feed["review_count"] == 1 and len(feed["events"]) == 2
-    assert feed["unresolved"][0]["reason"] == "unresolved_typed_identity"
+    assert feed["unresolved"][0]["reason"] == "unresolved_venue_identity"
     # A newly reviewed crosswalk resolves the replayed observation in both stores.
     source = next(s for s in fixture["sources"] if s["source_id"] == fixture["batches"][-1]["source_id"])
     source["venue_mappings"]["missing"] = source["venue_mappings"][vendor_venue]
