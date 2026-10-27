@@ -1,0 +1,199 @@
+{
+  "synthetic": true,
+  "now": "2026-10-26T20:00:00Z",
+  "policy": {
+    "allowed_teams": [
+      "demo-team"
+    ],
+    "allowed_projects": [
+      "demo-project"
+    ],
+    "trusted_actors": [
+      "demo-owner"
+    ],
+    "max_budget_cents": 200,
+    "max_timeout_seconds": 600,
+    "hourly_budget_cents": 500,
+    "daily_budget_cents": 2000,
+    "approved_profiles": [
+      "86805bbf24dc0ba501e8649e620bdcad7114c051ef7959e9a9e11fe958937caa"
+    ]
+  },
+  "profile": {
+    "profile_id": "synthetic-claude-quick-v1",
+    "provider": "anthropic",
+    "interface": "claude_api",
+    "model": "claude-opus-5-5",
+    "effort": "medium",
+    "prompt_version": "research-quick-v1",
+    "max_tokens": 16000,
+    "max_continuations": 1,
+    "sdk_max_retries": 0,
+    "tools": [
+      {
+        "type": "web_search_20260209",
+        "name": "web_search",
+        "max_uses": 5
+      },
+      {
+        "type": "web_fetch_20260209",
+        "name": "web_fetch",
+        "max_uses": 3,
+        "citations": {
+          "enabled": true
+        },
+        "max_content_tokens": 20000
+      }
+    ],
+    "pricing": {
+      "input_cents_per_mtok": 400,
+      "output_cents_per_mtok": 2000,
+      "cache_write_cents_per_mtok": 500,
+      "cache_read_cents_per_mtok": 20,
+      "web_search_cents_per_use": 1,
+      "verified_at": null
+    },
+    "assumptions": {
+      "prompt_tokens": 3000,
+      "search_result_tokens": 4000
+    }
+  },
+  "request": {
+    "version": "SS-RESEARCH-0.3",
+    "team_id": "demo-team",
+    "project_id": "demo-project",
+    "issue_id": "demo-issue",
+    "request_id": "5f0b8a52-7a43-4c43-9a3e-2b7c1d6e9f10",
+    "revision": 1,
+    "mode": "quick",
+    "brief": "SYNTHETIC ONLY: Compare detailed-offer providers on coverage, seat/party-size and fee semantics, historical depth, access/cost, retention/derived/training/testing rights and termination effects; list unresolved vendor questions.",
+    "classification": "public",
+    "allowed_use": "internal_research",
+    "budget_cents": 200,
+    "timeout_seconds": 600,
+    "expires_at": "2026-10-27T20:00:00Z",
+    "retention_until": "2026-11-26T20:00:00Z",
+    "execution_profile_digest": "86805bbf24dc0ba501e8649e620bdcad7114c051ef7959e9a9e11fe958937caa"
+  },
+  "approvals": [
+    {
+      "actor_id": "demo-owner",
+      "digest": "b93f5bbcecbb459a105af8ed2b68a6116157f13187d2d57f32cf5fdc460ba65a",
+      "expires_at": "2026-10-27T20:00:00Z"
+    }
+  ],
+  "mock_responses": [
+    {
+      "id": "msg_synthetic_1",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-opus-5-5",
+      "stop_reason": "pause_turn",
+      "content": [
+        {
+          "type": "server_tool_use",
+          "id": "srvtoolu_1",
+          "name": "web_search",
+          "input": {
+            "query": "detailed seat offer data provider"
+          }
+        },
+        {
+          "type": "web_search_tool_result",
+          "tool_use_id": "srvtoolu_1",
+          "content": [
+            {
+              "type": "web_search_result",
+              "url": "https://example.com/provider-a",
+              "title": "Provider A (synthetic)",
+              "encrypted_content": "synthetic",
+              "page_age": null
+            },
+            {
+              "type": "web_search_result",
+              "url": "https://example.org/provider-b",
+              "title": "Provider B (synthetic)",
+              "encrypted_content": "synthetic",
+              "page_age": null
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "input_tokens": 9000,
+        "output_tokens": 400,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "server_tool_use": {
+          "web_search_requests": 1,
+          "web_fetch_requests": 0
+        }
+      }
+    },
+    {
+      "id": "msg_synthetic_2",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-opus-5-5",
+      "stop_reason": "end_turn",
+      "content": [
+        {
+          "type": "server_tool_use",
+          "id": "srvtoolu_2",
+          "name": "web_fetch",
+          "input": {
+            "url": "https://example.com/provider-a/terms"
+          }
+        },
+        {
+          "type": "web_fetch_tool_result",
+          "tool_use_id": "srvtoolu_2",
+          "content": {
+            "type": "web_fetch_result",
+            "url": "https://example.com/provider-a/terms",
+            "retrieved_at": "2026-10-26T20:00:05Z",
+            "content": {
+              "type": "document",
+              "title": "Provider A terms (synthetic)",
+              "citations": {
+                "enabled": true
+              },
+              "source": {
+                "type": "text",
+                "media_type": "text/plain",
+                "data": "SYNTHETIC terms text."
+              }
+            }
+          }
+        },
+        {
+          "type": "text",
+          "text": "Provider A lists seats individually.",
+          "citations": [
+            {
+              "type": "web_search_result_location",
+              "url": "https://example.com/provider-a",
+              "title": "Provider A (synthetic)",
+              "encrypted_index": "synthetic",
+              "cited_text": "SYNTHETIC: offers are listed per seat."
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "text": "{\"executive_summary\": \"SYNTHETIC: Provider A documents seat-level offers; Provider B documents section-level offers only. Neither grants training rights in retrieved text.\", \"claims\": [{\"id\": \"c1\", \"text\": \"SYNTHETIC: Provider A exposes seat-level offer data.\", \"kind\": \"fact\", \"confidence\": \"medium\", \"source_urls\": [\"https://example.com/provider-a\"]}, {\"id\": \"c2\", \"text\": \"SYNTHETIC: Provider A terms restrict retention to 30 days.\", \"kind\": \"fact\", \"confidence\": \"medium\", \"source_urls\": [\"https://example.com/provider-a/terms\"]}, {\"id\": \"c3\", \"text\": \"SYNTHETIC: Provider B appears to aggregate offers by section.\", \"kind\": \"inference\", \"confidence\": \"low\", \"source_urls\": [\"https://example.org/provider-b\"]}, {\"id\": \"c4\", \"text\": \"SYNTHETIC: Training/testing rights for either provider are unknown.\", \"kind\": \"unknown\", \"confidence\": \"low\", \"source_urls\": []}], \"alternatives\": [\"SYNTHETIC: Defer detailed offers and launch discovery without them.\"], \"risks_unknowns\": [\"SYNTHETIC: Derived-data and termination effects are not documented.\"], \"next_actions\": [\"SYNTHETIC: Ask both vendors for written retention, derived-use and training terms.\"]}"
+        }
+      ],
+      "usage": {
+        "input_tokens": 21000,
+        "output_tokens": 1800,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "server_tool_use": {
+          "web_search_requests": 0,
+          "web_fetch_requests": 1
+        }
+      }
+    }
+  ]
+}
