@@ -37,6 +37,33 @@ def test_unresolved_observations_persist(pg_store, tmp_path):
     assert store.feed(NOW) == baseline.feed(NOW)
 
 
+def test_review_queue_rows_survive_the_upgrade_migrations(pg_upgrade):
+    # source_unresolved_records is the only home of review items. Rows written at the
+    # upgrade base schema survive every later migration and still load; no second copy
+    # (such as a JSON column on discovery_state) exists to drift from them.
+    store, fixture, upgrade = pg_upgrade
+    for batch in fixture["batches"]:
+        for record in batch["records"]:
+            for performer in record["performers"]:
+                performer["vendor_artist_id"] = "unknown"
+    written = store.seed(fixture, NOW)["unresolved"]
+    query = "SELECT * FROM source_unresolved_records ORDER BY source_record_id"
+    with store._connect() as conn:
+        rows = conn.execute(query).fetchall()
+    assert len(rows) == len(written) == sum(len(b["records"]) for b in fixture["batches"])
+
+    upgrade()
+    with store._connect() as conn:
+        assert conn.execute(query).fetchall() == rows
+        columns = conn.execute(
+            """SELECT column_name FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'discovery_state'"""
+        ).fetchall()
+    assert "unresolved_observations" not in {c["column_name"] for c in columns}
+    assert store.read()["unresolved"] == written
+    assert store.feed(NOW)["review_count"] == len(written)
+
+
 def test_rescheduled_status_persists_like_the_json_store(pg_store, tmp_path):
     # Regression: the enum lacked 'rescheduled', so this seed rolled back entirely.
     store, fixture = pg_store
