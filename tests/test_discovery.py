@@ -123,9 +123,13 @@ class DiscoveryTests(unittest.TestCase):
 
     def test_unresolved_identity_is_not_matched_by_name(self):
         self.fixture["batches"][0]["records"][0]["performers"][0]["vendor_artist_id"] = "unmapped"
-        with self.assertRaisesRegex(DiscoveryError, "unresolved_typed_identity"):
-            self.seed()
-        self.assertFalse(self.store.path.exists())
+        first = self.seed()
+        self.assertEqual(len(first["unresolved"]), 1)
+        self.assertEqual(len(first["records"]), 3)
+        feed = self.store.feed(NOW)
+        self.assertEqual(feed["unresolved"][0]["reason"], "unresolved_typed_identity")
+        self.assertEqual(feed["review_count"], 1)
+        self.assertEqual(self.seed(), first)
 
     def test_different_known_venue_or_start_does_not_merge(self):
         self.fixture["batches"][1]["records"][0]["starts_at"] = "2026-11-07T02:00:00Z"
@@ -186,3 +190,4 @@ class DiscoveryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -4,7 +4,17 @@ NYC-area live music discovery and, once licensed comparable offer history suppor
 
 ## Current state — 2026-10-18
 
-The repository is private. Main at `e28959e77408fbab397347e0d16614de80d59971` includes the merged SS-RESEARCH-0.2 offline contract; its provider calls, scheduler, webhook and publication path remain disabled. The discovery foundation is now proposed in a separate PR: a synthetic-data PWA, local FastAPI discovery contract, Supabase migration ledger and CI checks. None is deployed; the migration is not applied; no product provider, validated forecast model, paid research execution or notification delivery is active.
+The repository is private. Verified base `da735d5` includes the merged offline research
+contract, fixture-backed discovery feed/API, disabled Discovery adapter, permission/RLS
+tests and dependency fixes through PR #12. This branch completes unresolved-identity
+review, date/status validation, pagination and rendered feed tests. The current
+amendment adds transactional local PostgreSQL persistence; it does not apply remote
+migrations. Nothing is deployed and no provider is activated.
+
+Run the [fixture-to-feed quickstart](docs/contracts/discovery-demo-v0.1.md#run-locally).
+See the [audience-provider evaluation](docs/audience-provider-evaluation.md); the
+Soundcharts-first evaluation recommendation is pending approval. Neither audience
+provider is integrated.
 
 - [Notion project and architecture index](https://app.notion.com/p/3f57ecee36a980dfbc14eb53a52e3d0f)
 - [00 — Product Charter & Phase 0](https://app.notion.com/p/3f57ecee36a981d09ddfcb8d962654a4?pvs=204)
@@ -81,7 +91,7 @@ Candidate thresholds (15% and $25 total-order change in 60 minutes) require back
 
 ## Next iteration
 
-The selected stack is Next.js/TypeScript PWA on Vercel, Supabase PostgreSQL/Auth, Render API/workers, and Cloudflare R2 when its storage gate opens. Review the discovery-foundation PR and CI evidence; then confirm the first artist/venue sample, NYC catchment and notification channel. Provider activation and runtime provisioning remain separate owner approvals.
+The selected stack is Next.js/TypeScript PWA on Vercel, Supabase PostgreSQL/Auth, Render API/workers, and Cloudflare R2 when its storage gate opens. Review the local PostgreSQL amendment and validation evidence, including transactional replay/recovery, before connecting production storage. Confirm the first artist/venue sample, NYC catchment and notification channel. Provider activation and runtime provisioning remain separate owner approvals.
 
 Current product layout: `apps/web`, `services/api`, `supabase/migrations`, `tests/fixtures`, `jobs`, `adapters` and `docs`. Future delivery adds provider adapters, durable jobs, model evaluation and infrastructure manifests only as their gates open.
 
@@ -104,3 +114,62 @@ python3 -m jobs.linear_research --fixture tests/fixtures/research/hourly.json
 ```
 
 See [architecture reconciliation](docs/linear-research-agent.md) for verified branch facts, deferred integrations, source boundaries and activation gates. Discovery remains the first consumer milestone.
+
+## Local PostgreSQL discovery
+
+Use a dedicated disposable PostgreSQL 16 database. The application never creates a
+schema on startup and accepts only an explicit loopback database host. For example:
+
+```bash
+docker run --name sweet-seats-local -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=sweet_seats -p 127.0.0.1:5432:5432 -d postgres:16
+export SWEET_SEATS_LOCAL_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/sweet_seats
+python -m pip install --require-hashes -r services/api/requirements-dev.lock
+python -m pip install --no-deps -e ./services/api
+# Run once in this NEW database, in filename order. Never target a shared/hosted DB.
+for f in supabase/migrations/*.sql; do
+  psql "$SWEET_SEATS_LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f" || break
+done
+python -m services.api.app.discovery
+python -m uvicorn app.main:app --app-dir services/api --host 127.0.0.1 --port 8000
+# Separate terminal, after exporting SWEET_SEATS_API_ORIGIN=http://127.0.0.1:8000:
+cd apps/web
+npm ci
+npm run dev
+```
+
+Open `http://localhost:3000`. The CLI prints source/logical-key replay digests,
+collection outcomes and canonical/observation counts. Re-running the same fixture
+preserves IDs/counts. If PostgreSQL is configured but unavailable, the API returns
+503; it never silently serves the JSON store. Without the variable, the legacy
+single-writer `.local/discovery.json` demo remains available. `--store PATH` explicitly
+selects that legacy adapter. Existing JSON data is not automatically imported.
+
+Database acceptance uses a local administrative account able to create/drop throwaway
+test databases. Never use a hosted/shared database. Tests apply all migrations only
+inside uniquely named test databases and drop those databases afterward:
+
+```bash
+export SWEET_SEATS_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres
+python -m pytest services/api/tests -q
+python -m unittest discover -s tests -v
+```
+
+The CI PostgreSQL 16 job also exercises Supabase-style default grants, RLS denial,
+source-permission boundaries and deliberately broken negative controls. PostgreSQL
+integration tests skip explicitly when the test URL is absent; that is not a database
+validation pass. Keep both database URLs server-side.
+
+## Dependency verification
+
+CI installs the hashed Python 3.12 runtime/development dependency graph from
+`services/api/requirements-dev.lock`; production-only installs use
+`services/api/requirements-runtime.lock`. Install the local API with `--no-deps -e`
+after the lock. Use `npm ci` for the web lock. Both full npm audits (including dev)
+and the Python dev/runtime audit block CI on any reported advisory; there are no
+advisory ignore lists or report-only audit steps.
+
+The pinned Next ESLint package's directory-only glob call uses a small private
+compatibility adapter backed by `tinyglobby`, replacing the unpatched `braces` chain.
+Next, React and the Next lint rules retain their versions. See
+[dependency and API gap audit](docs/API-dependency-audit.md) for the exact scope,
+compatibility evidence, review findings and remaining integration work.

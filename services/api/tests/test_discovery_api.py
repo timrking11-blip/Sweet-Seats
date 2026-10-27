@@ -1,6 +1,7 @@
 """API contract tests over a disposable persisted synthetic store."""
 import copy
 import json
+from datetime import timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import UUID
@@ -15,13 +16,15 @@ from app.main import app, discovery_now, discovery_store, event_detail, events
 NOW = timestamp("2026-10-18T07:00:00Z")
 
 
-@pytest.fixture
-def discovery_client():
+@pytest.fixture(params=["json", "postgres"])
+def discovery_client(request):
     root = DEFAULT_FIXTURE.parents[3] / ".local" / "tests"
     root.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(dir=root) as directory:
         store = FixtureStore(Path(directory) / "events.json")
         fixture = json.loads(DEFAULT_FIXTURE.read_text(encoding="utf-8"))
+        if request.param == "postgres":
+            store, fixture = request.getfixturevalue("pg_store")
         app.dependency_overrides[discovery_store] = lambda: store
         app.dependency_overrides[discovery_now] = lambda: NOW
         try:
@@ -51,13 +54,19 @@ def test_fixture_to_persisted_list_and_detail(discovery_client):
     assert event["available_at"] == "2026-10-18T06:50:00Z"
     assert event["stale"] is False
     assert event["ticket_url"] is None
+    # Observation-based freshness and provenance timestamps survive persistence and the API.
+    observed = timestamp(event["observed_at"])
+    assert observed == timestamp("2026-10-18T06:50:00Z")
+    assert timestamp(event["fresh_until"]) - observed == timedelta(hours=24)
+    assert timestamp(event["first_seen_at"]) <= observed
+    assert {s["observed_at"] for s in event["sources"]} == {"2026-10-18T06:50:00Z"}
 
 
 def test_unseeded_store_is_503_with_redacted_error(discovery_client):
     client, store, _ = discovery_client
     response = client.get("/v1/events")
     assert response.status_code == 503
-    assert str(store.path) not in response.text
+    assert str(getattr(store, "path", "synthetic-secret-canary")) not in response.text
     assert "events" not in response.json()
 
 
@@ -115,3 +124,26 @@ def test_direct_read_handler_does_not_turn_missing_store_into_empty(tmp_path):
     with pytest.raises(HTTPException) as caught:
         events(store=FixtureStore(tmp_path / "missing.json"), now=NOW)
     assert caught.value.status_code == 503
+
+def test_pagination_orders_persisted_events_without_duplicates(discovery_client):
+    client, store, fixture = discovery_client
+    store.seed(fixture, NOW)
+    first = client.get("/v1/events?limit=2").json()
+    second = client.get("/v1/events?limit=2&offset=2").json()
+    assert first["pagination"] == {"limit": 2, "offset": 0, "total": 3, "next_offset": 2}
+    assert second["pagination"]["next_offset"] is None
+    combined = first["events"] + second["events"]
+    assert len({e["event_id"] for e in combined}) == 3
+    assert [e["local_date"] for e in combined] == sorted(e["local_date"] for e in combined)
+    for query in ("limit=0", "limit=101", "offset=-1", "limit=bad"):
+        assert client.get("/v1/events?" + query).status_code == 422
+
+
+def test_unresolved_records_visible_without_unverified_canonical_artist(discovery_client):
+    client, store, fixture = discovery_client
+    fixture["batches"][0]["records"][0]["performers"][0]["vendor_artist_id"] = "unknown"
+    store.seed(fixture, NOW)
+    feed = client.get("/v1/events").json()
+    assert feed["review_count"] == 1
+    assert feed["unresolved"][0]["reason"] == "unresolved_typed_identity"
+    assert len(feed["events"]) == 3
