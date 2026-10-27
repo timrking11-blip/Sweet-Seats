@@ -79,8 +79,9 @@ def test_validation_and_database_failure_rollback(pg_store, monkeypatch):
     broken = copy.deepcopy(fixture)
     for b in broken["batches"]:
         b["logical_key"] += "-new"
-    broken["batches"][-1]["records"][-1]["venue_vendor_id"] = "missing"
-    with pytest.raises(DiscoveryError):
+    # An unknown venue is retained for review (see the next test); invalid facts are rejected.
+    broken["batches"][-1]["records"][-1]["local_date"] = "2026-11-20"
+    with pytest.raises(DiscoveryError, match="local_date_timezone_mismatch"):
         store.seed(broken, NOW)
     assert store.read() == before
     original = PostgresStore._write
@@ -95,6 +96,34 @@ def test_validation_and_database_failure_rollback(pg_store, monkeypatch):
     with pytest.raises(DiscoveryError, match="store_write_failed"):
         store.seed(retry, NOW)
     assert store.read() == before
+
+
+def test_unknown_venue_review_item_persists_and_resolves_like_fixture_store(pg_store, tmp_path):
+    store, fixture = pg_store
+    baseline = FixtureStore(tmp_path / "events.json")
+    record = fixture["batches"][-1]["records"][-1]
+    vendor_venue = record["venue_vendor_id"]
+    record["venue_vendor_id"] = "missing"
+    baseline.seed(fixture, NOW)
+    state = store.seed(fixture, NOW)
+    assert len(state["unresolved"]) == 1
+    feed = store.feed(NOW)
+    assert feed == baseline.feed(NOW)
+    assert feed["review_count"] == 1 and len(feed["events"]) == 2
+    assert feed["unresolved"][0]["reason"] == "unresolved_typed_identity"
+    # A newly reviewed crosswalk resolves the replayed observation in both stores.
+    source = next(s for s in fixture["sources"] if s["source_id"] == fixture["batches"][-1]["source_id"])
+    source["venue_mappings"]["missing"] = source["venue_mappings"][vendor_venue]
+    fixture["batches"] = [fixture["batches"][-1]]
+    fixture["batches"][0]["logical_key"] += "-reviewed"
+    baseline.seed(fixture, NOW)
+    state = store.seed(fixture, NOW)
+    assert state["unresolved"] == {}
+    feed = store.feed(NOW)
+    assert feed == baseline.feed(NOW)
+    assert feed["review_count"] == 0 and len(feed["events"]) == 3
+    with store._connect() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM source_unresolved_records").fetchone()["n"] == 0
 
 
 @pytest.mark.parametrize(

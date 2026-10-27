@@ -172,6 +172,11 @@ class PostgresStore:
                 collection_run_key=run_keys[row["collection_run_id"]],
             )
             state["records"][rid] = record
+        # Review items keep the declared observation exactly as ingest retained it.
+        state["unresolved"] = {
+            str(row["source_record_id"]): row["observation"]
+            for row in conn.execute("SELECT * FROM source_unresolved_records")
+        }
         return state
 
     def seed(self, fixture: dict, now: datetime) -> dict:
@@ -338,6 +343,25 @@ class PostgresStore:
                              VALUES (%s,%s,%s,%s)""",
                     (rid, p["artist_id"], p["role"], p["billing_order"]),
                 )
+        for rid, r in state["unresolved"].items():
+            if rid in before["unresolved"]:
+                continue
+            conn.execute(
+                """INSERT INTO source_unresolved_records(source_record_id,source_id,permission_id,
+                         collection_run_id,reason,payload_hash,observation) VALUES (%s,%s,%s,%s,%s,%s,%s)""",
+                (
+                    rid,
+                    r["source_id"],
+                    r["permission_id"],
+                    uuid5(NAMESPACE, r["collection_run_key"]),
+                    r["reason"],
+                    r["payload_hash"],
+                    Jsonb(r),
+                ),
+            )
+        # A replay under a newly reviewed crosswalk resolves the item into source_event_records.
+        for rid in before["unresolved"].keys() - state["unresolved"].keys():
+            conn.execute("DELETE FROM source_unresolved_records WHERE source_record_id=%s", (rid,))
         conn.execute(
             "INSERT INTO discovery_state VALUES (true,'SS-DISCOVERY-DEMO-0.1',true) ON CONFLICT DO NOTHING"
         )
