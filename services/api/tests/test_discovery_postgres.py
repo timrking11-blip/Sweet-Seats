@@ -79,8 +79,10 @@ def test_validation_and_database_failure_rollback(pg_store, monkeypatch):
     broken = copy.deepcopy(fixture)
     for b in broken["batches"]:
         b["logical_key"] += "-new"
-    broken["batches"][-1]["records"][-1]["venue_vendor_id"] = "missing"
-    with pytest.raises(DiscoveryError):
+    # An unresolved venue is quarantined for review, not rejected, so abort on malformed
+    # input instead. Earlier batches in the same fixture must not be committed.
+    broken["batches"][-1]["records"][-1]["observed_at"] = "not-a-timestamp"
+    with pytest.raises(DiscoveryError, match="invalid_zoned_timestamp"):
         store.seed(broken, NOW)
     assert store.read() == before
     original = PostgresStore._write
@@ -95,6 +97,47 @@ def test_validation_and_database_failure_rollback(pg_store, monkeypatch):
     with pytest.raises(DiscoveryError, match="store_write_failed"):
         store.seed(retry, NOW)
     assert store.read() == before
+
+
+def test_review_records_persist_replay_and_resolve(pg_store, tmp_path):
+    store, fixture = pg_store
+    batch = fixture["batches"][0]
+    batch["records"][0]["performers"][0]["vendor_artist_id"] = "unreviewed-artist"
+    baseline = FixtureStore(tmp_path / "events.json")
+    baseline.seed(copy.deepcopy(fixture), NOW)
+    state = store.seed(fixture, NOW)
+    assert len(state["unresolved"]) == 1
+    # Fresh connections recover the quarantined observation and the same projection.
+    feed = PostgresStore(store.dsn).feed(NOW)
+    assert feed == baseline.feed(NOW)
+    assert feed["review_count"] == 1 and len(feed["events"]) == 3
+    assert store.seed(fixture, NOW + timedelta(hours=1)) == state
+    with store._connect() as conn:
+        [row] = conn.execute("SELECT * FROM source_review_records").fetchall()
+        assert row["reason"] == "unresolved_typed_identity"
+        assert "collection_run_key" not in row["observation"]
+        for role in ("anon", "authenticated"):
+            with conn.transaction():
+                conn.execute(sql.SQL("SET LOCAL ROLE {}").format(sql.Identifier(role)))
+                assert conn.execute("SELECT * FROM source_review_records").fetchall() == []
+                with pytest.raises(psycopg.errors.InsufficientPrivilege), conn.transaction():
+                    conn.execute(
+                        "INSERT INTO source_review_records SELECT * FROM "
+                        "jsonb_populate_record(NULL::source_review_records,%s)",
+                        (Jsonb({k: str(v) if k != "observation" else v for k, v in row.items()}),),
+                    )
+    # Replaying the same observation under a newly reviewed crosswalk resolves it.
+    source = next(s for s in fixture["sources"] if s["source_id"] == batch["source_id"])
+    # Northbound Echo: not otherwise credited on this record, so no duplicate credit.
+    source["artist_mappings"]["unreviewed-artist"] = "6783dc1d-23ac-5289-835d-bd846df0c963"
+    batch["logical_key"] += "-reviewed"
+    fixture["batches"] = [batch]
+    baseline.seed(copy.deepcopy(fixture), NOW)
+    resolved = store.seed(fixture, NOW)
+    assert resolved["unresolved"] == {}
+    assert PostgresStore(store.dsn).feed(NOW) == baseline.feed(NOW)
+    with store._connect() as conn:
+        assert conn.execute("SELECT count(*) AS n FROM source_review_records").fetchone()["n"] == 0
 
 
 @pytest.mark.parametrize(

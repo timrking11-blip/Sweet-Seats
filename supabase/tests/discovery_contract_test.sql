@@ -7,7 +7,8 @@ declare
   policies integer;
   lineage_keys integer;
 begin
-  foreach tbl in array array['discovery_state','source_event_records','source_event_performers'] loop
+  foreach tbl in array array['discovery_state','source_event_records','source_event_performers',
+                             'source_review_records'] loop
     if not exists (select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
                    where n.nspname='public' and c.relname=tbl and c.relrowsecurity) then
       raise exception 'FAIL discovery RLS missing: %', tbl;
