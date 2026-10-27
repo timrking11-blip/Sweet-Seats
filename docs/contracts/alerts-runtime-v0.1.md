@@ -23,21 +23,31 @@ scheduler) sends alerts with the browser closed:
    several workers can share the queue. Immediately before sending it re-checks expiry,
    that the event is still displayable, freshness, and current consent (an unrevoked
    subscription and no deletion request); otherwise the alert is suppressed with a
-   reason. Each attempt per subscription is recorded. Failures back off (2, 4, 8, ...
-   up to 60 minutes) and stop as `failed` after 5 attempts.
+   reason. Each attempt per subscription is recorded.
+
+   Delivery state is kept per subscription (`alert_deliveries`). When email succeeds
+   and push fails, the alert stays `pending`; the retry sends to push only, and email
+   is never sent again. A subscription is terminal when it is `sent`, `failed` (5
+   failed attempts for that subscription), or `suppressed` (its consent was withdrawn,
+   or the alert expired or lost display permission before it was delivered there).
+   The alert finishes only when every subscription is terminal: `sent` if any
+   delivery succeeded, otherwise `failed` or `suppressed`. Retries back off (2, 4, 8,
+   ... up to 60 minutes).
 4. **Jobs** (`run_job`). Each tick's plan and dispatch run as durable jobs keyed by the
    5-minute tick, so missed ticks coalesce instead of replaying. Leases recover a
    crashed worker; failures retry with backoff and end as `dead` after the cap. Error
    records keep a fixed code, never a message.
 
 Delivery is **at-least-once**: a crash after a send but before its commit leaves the
-alert `sending`; after the 5-minute lease it is retried. Provider message ids on each
-attempt support reconciliation.
+alert `sending`, and that round's delivery state rolls back with it; after the 5-minute
+lease it is retried. Provider message ids on each attempt support reconciliation.
+Committed delivery state is never re-sent: a retry after a partial delivery goes only
+to the subscriptions still owed.
 
 ## First-party record rule
 
-`alerts`, `delivery_attempts` and `outcome_events` store IDs, statuses and times only.
-Message text (title, venue, date) is rendered at send time from the current projection
+`alerts`, `alert_deliveries`, `delivery_attempts` and `outcome_events` store IDs,
+statuses and times only. Message text (title, venue, date) is rendered at send time from the current projection
 and never stored. `supabase/tests/user_isolation_test.sql` pins every allowed column;
 a negative control adds a provider title column and must be caught.
 

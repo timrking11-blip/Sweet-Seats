@@ -199,13 +199,17 @@ begin
       ('delivery_attempts', 'subscription_id'), ('delivery_attempts', 'attempt_no'),
       ('delivery_attempts', 'status'), ('delivery_attempts', 'provider_message_id'),
       ('delivery_attempts', 'error_code'), ('delivery_attempts', 'attempted_at'),
+      ('alert_deliveries', 'alert_id'), ('alert_deliveries', 'subscription_id'),
+      ('alert_deliveries', 'status'), ('alert_deliveries', 'attempts'),
+      ('alert_deliveries', 'last_error_code'), ('alert_deliveries', 'suppressed_reason'),
+      ('alert_deliveries', 'sent_at'), ('alert_deliveries', 'updated_at'),
       ('outcome_events', 'outcome_event_id'), ('outcome_events', 'user_id'),
       ('outcome_events', 'alert_id'), ('outcome_events', 'event_id'), ('outcome_events', 'kind'),
       ('outcome_events', 'occurred_at'), ('outcome_events', 'recorded_at'),
       ('outcome_events', 'confirmation_method'), ('outcome_events', 'paid_total_minor'),
       ('outcome_events', 'currency'))
     and table_name in ('user_profiles', 'artist_follows', 'notification_subscriptions',
-                       'alerts', 'delivery_attempts', 'outcome_events');
+                       'alerts', 'delivery_attempts', 'alert_deliveries', 'outcome_events');
   if unexpected is not null then
     raise exception 'FAIL user tables have unreviewed columns: %', unexpected;
   end if;

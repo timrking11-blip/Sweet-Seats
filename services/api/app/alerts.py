@@ -8,6 +8,8 @@ The worker runs server-side on a schedule, so alerts go out with the browser clo
 - dispatch_due claims due alerts with a lease, re-checks expiry, display permission,
   freshness and current consent at send time, renders the message then (it is never
   stored), records each delivery attempt, and retries with backoff up to a cap.
+  Delivery state is per subscription: a retry goes only to subscriptions not yet
+  delivered, and the alert finishes when every subscription is terminal.
 - run_job wraps a unit of work in a durable job row with a lease, retries and a
   dead-letter state. Missed ticks coalesce: each tick has one logical key.
 
@@ -173,56 +175,92 @@ def _finish(conn, alert_id, worker: str, **fields) -> None:
         (*fields.values(), alert_id, worker))
 
 
+def _dispatch_one(conn, transport: Transport, alert: dict, event: dict | None, now: datetime,
+                  worker: str) -> str:
+    """Deliver one claimed alert to the subscriptions still owed it; returns the outcome."""
+    alert_id = alert["alert_id"]
+    reason = ("expired" if now >= alert["expires_at"]
+              else "not_displayable" if event is None
+              else "stale_source" if event["stale"] else None)
+    current = [] if reason else [row["subscription_id"] for row in conn.execute(
+        """SELECT s.subscription_id
+           FROM notification_subscriptions s
+           JOIN user_profiles p ON p.user_id = s.user_id
+           WHERE s.user_id = %s AND s.revoked_at IS NULL AND s.consent_at <= %s
+             AND p.deletion_requested_at IS NULL""", (alert["user_id"], now))]
+    for subscription_id in current:
+        conn.execute(
+            """INSERT INTO alert_deliveries(alert_id, subscription_id, updated_at)
+               VALUES (%s, %s, %s) ON CONFLICT DO NOTHING""", (alert_id, subscription_id, now))
+    # A pending delivery no longer owed: the alert lapsed, or that consent was withdrawn.
+    conn.execute(
+        """UPDATE alert_deliveries SET status = 'suppressed', suppressed_reason = %s, updated_at = %s
+           WHERE alert_id = %s AND status = 'pending' AND NOT subscription_id = ANY(%s::uuid[])""",
+        (reason or "no_current_consent", now, alert_id, current))
+    owed = conn.execute(
+        """SELECT d.subscription_id, d.attempts, s.channel, s.endpoint_ref
+           FROM alert_deliveries d JOIN notification_subscriptions s USING (subscription_id)
+           WHERE d.alert_id = %s AND d.status = 'pending'
+           ORDER BY d.subscription_id""", (alert_id,)).fetchall()
+    message = render(alert, event) if owed else None
+    for sub in owed:
+        attempt_no = sub["attempts"] + 1
+        try:
+            provider_id = transport.send(sub["channel"], sub["endpoint_ref"], message)
+            row = ("sent", provider_id, None)
+        except TransportError as exc:
+            row = ("failed", None, exc.code)
+        conn.execute(
+            """INSERT INTO delivery_attempts(alert_id, subscription_id, attempt_no, status,
+                                             provider_message_id, error_code, attempted_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (alert_id, sub["subscription_id"], attempt_no, *row, now))
+        # Terminal failure rule: MAX_ATTEMPTS failed attempts for this subscription.
+        status = row[0] if row[0] == "sent" or attempt_no >= MAX_ATTEMPTS else "pending"
+        conn.execute(
+            """UPDATE alert_deliveries SET status = %s, attempts = %s, last_error_code = %s,
+                      sent_at = %s, updated_at = %s
+               WHERE alert_id = %s AND subscription_id = %s""",
+            (status, attempt_no, row[2], now if status == "sent" else None, now,
+             alert_id, sub["subscription_id"]))
+    deliveries = conn.execute(
+        "SELECT status, sent_at FROM alert_deliveries WHERE alert_id = %s", (alert_id,)).fetchall()
+    attempts = alert["attempts"] + (1 if owed else 0)
+    statuses = {d["status"] for d in deliveries}
+    if "pending" in statuses:
+        backoff = timedelta(minutes=min(2 ** attempts, 60))
+        _finish(conn, alert_id, worker, status="pending", attempts=attempts,
+                next_attempt_at=now + backoff)
+        return "retry"
+    # Every subscription is terminal. Sent if any delivery succeeded.
+    if "sent" in statuses:
+        _finish(conn, alert_id, worker, status="sent", attempts=attempts,
+                sent_at=max(d["sent_at"] for d in deliveries if d["sent_at"]))
+        return "sent"
+    if "failed" in statuses:
+        _finish(conn, alert_id, worker, status="failed", attempts=attempts)
+        return "failed"
+    _finish(conn, alert_id, worker, status="suppressed",
+            suppressed_reason=reason or "no_current_consent")
+    return "suppressed"
+
+
 def dispatch_due(conn, transport: Transport, feed: dict, now: datetime, worker: str,
                  limit: int = 20) -> dict:
-    """Send due alerts. Each alert's outcome is committed on its own."""
+    """Send due alerts. Each alert's outcome is committed on its own.
+
+    Delivery state is kept per subscription (alert_deliveries). A retry sends only to
+    subscriptions still pending, so one channel failing never re-sends another's message.
+    The alert finishes once every subscription is sent, failed MAX_ATTEMPTS times, or
+    suppressed (consent withdrawn, or the alert expired or lost display permission).
+    """
     reclaim_expired_leases(conn, now)
     events = {e["event_id"]: e for e in feed["events"]}
     counts = {"sent": 0, "suppressed": 0, "retry": 0, "failed": 0}
     for alert in claim_due(conn, now, worker, limit):
         with conn.transaction():
             event = events.get(str(alert["event_id"]))
-            reason = ("expired" if now >= alert["expires_at"]
-                      else "not_displayable" if event is None
-                      else "stale_source" if event["stale"] else None)
-            subscriptions = [] if reason else conn.execute(
-                """SELECT s.subscription_id, s.channel, s.endpoint_ref
-                   FROM notification_subscriptions s
-                   JOIN user_profiles p ON p.user_id = s.user_id
-                   WHERE s.user_id = %s AND s.revoked_at IS NULL AND s.consent_at <= %s
-                     AND p.deletion_requested_at IS NULL
-                   ORDER BY s.subscription_id""", (alert["user_id"], now)).fetchall()
-            if not reason and not subscriptions:
-                reason = "no_current_consent"
-            if reason:
-                _finish(conn, alert["alert_id"], worker, status="suppressed", suppressed_reason=reason)
-                counts["suppressed"] += 1
-                continue
-            message, attempt_no, delivered = render(alert, event), alert["attempts"] + 1, False
-            for sub in subscriptions:
-                try:
-                    provider_id = transport.send(sub["channel"], sub["endpoint_ref"], message)
-                    row = ("sent", provider_id, None)
-                    delivered = True
-                except TransportError as exc:
-                    row = ("failed", None, exc.code)
-                conn.execute(
-                    """INSERT INTO delivery_attempts(alert_id, subscription_id, attempt_no, status,
-                                                     provider_message_id, error_code, attempted_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                    (alert["alert_id"], sub["subscription_id"], attempt_no, *row, now))
-            if delivered:
-                _finish(conn, alert["alert_id"], worker, status="sent", sent_at=now,
-                        attempts=attempt_no)
-                counts["sent"] += 1
-            elif attempt_no >= MAX_ATTEMPTS:
-                _finish(conn, alert["alert_id"], worker, status="failed", attempts=attempt_no)
-                counts["failed"] += 1
-            else:
-                backoff = timedelta(minutes=min(2 ** attempt_no, 60))
-                _finish(conn, alert["alert_id"], worker, status="pending", attempts=attempt_no,
-                        next_attempt_at=now + backoff)
-                counts["retry"] += 1
+            counts[_dispatch_one(conn, transport, alert, event, now, worker)] += 1
     return counts
 
 

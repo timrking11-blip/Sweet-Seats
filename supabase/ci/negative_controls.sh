@@ -148,6 +148,14 @@ run_control "provider title column added to the alert outbox" \
   "FAIL user tables have unreviewed columns: alerts.event_title" "$USER_TEST" \
   "alter table public.alerts add column event_title text;"
 
+run_control "RLS disabled on per-subscription delivery state" \
+  "public tables without row level security: alert_deliveries" "$RLS_TEST" \
+  "alter table public.alert_deliveries disable row level security;"
+
+run_control "provider value column added to delivery state" \
+  "FAIL user tables have unreviewed columns: alert_deliveries.endpoint_address" "$USER_TEST" \
+  "alter table public.alert_deliveries add column endpoint_address text;"
+
 echo "${count} negative controls, ${failures} not caught"
 [ "$failures" -eq 0 ]
 
