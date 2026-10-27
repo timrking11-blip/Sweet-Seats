@@ -14,7 +14,8 @@ migrations. Nothing is deployed and no provider is activated.
 Run the [fixture-to-feed quickstart](docs/contracts/discovery-demo-v0.1.md#run-locally).
 See the [audience-provider evaluation](docs/audience-provider-evaluation.md); the
 Soundcharts-first evaluation recommendation is pending approval. Neither audience
-provider is integrated.
+provider is integrated. The [NYC audience observation and audit design](docs/superpowers/specs/2026-10-27-nyc-audience-audit-design.md)
+(SS-AUDIENCE-0.1) is a specification under review; nothing in it is implemented.
 
 - [Notion project and architecture index](https://app.notion.com/p/3f57ecee36a980dfbc14eb53a52e3d0f)
 - [00 — Product Charter & Phase 0](https://app.notion.com/p/3f57ecee36a981d09ddfcb8d962654a4?pvs=204)

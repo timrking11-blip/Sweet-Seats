@@ -26,6 +26,10 @@ endpoint entitlements, total route cost and licensing. Obtain explicit storage,
 retention/deletion, caching, attribution, public display, derived features, testing,
 modeling and termination permissions. No account entitlement or agreement was inspected.
 
+The storage and audit contract for these observations is specified in the
+[NYC audience observation and audit design](superpowers/specs/2026-10-27-nyc-audience-audit-design.md)
+(SS-AUDIENCE-0.1, under review). Viberate is an additional sample-test candidate there.
+
 Future observation fields: provider, vendor/canonical artist IDs, metric definition,
 rolling window, geography, observed/retrieved timestamps, measurement method,
 estimate/imputation flags (unknown stays unknown), permission reference. Label changes
