@@ -14,6 +14,7 @@ set -uo pipefail
 ROLES=supabase/ci/emulate_supabase_roles.sql
 PERMISSIONS_TEST=supabase/tests/source_permissions_test.sql
 RLS_TEST=supabase/tests/rls_denial_test.sql
+MB_RUNS_TEST=supabase/tests/musicbrainz_collection_runs_test.sql
 mapfile -t MIGRATIONS < <(ls supabase/migrations/*.sql | sort)
 
 failures=0
@@ -97,6 +98,10 @@ run_control "RLS disabled on source observations" \
   "public tables without row level security: source_event_records" "$RLS_TEST" \
   "alter table public.source_event_records disable row level security;"
 
+run_control "RLS disabled on review records" \
+  "public tables without row level security: source_unresolved_records" "$RLS_TEST" \
+  "alter table public.source_unresolved_records disable row level security;"
+
 run_control "permissive observation policy" \
   "discovery table has policies: source_event_records" "supabase/tests/discovery_contract_test.sql" \
   "create policy leak on public.source_event_records for select to anon using (true);"
@@ -113,6 +118,31 @@ run_control "revocation treated as immediate" \
 run_control "expiry boundary made inclusive" \
   "FAIL expiry exactly at as_of is denied" "$PERMISSIONS_TEST" \
   "" yes "s/permission.expires_at > as_of/permission.expires_at >= as_of/"
+
+# MusicBrainz collection runs.
+run_control "begin_musicbrainz_run executable by anon" \
+  "FAIL anon can execute public.begin_musicbrainz_run(text, text)" "$MB_RUNS_TEST" \
+  "grant execute on function public.begin_musicbrainz_run(text, text) to anon;"
+
+run_control "collection run ignores permission revocation" \
+  "FAIL run used permission" "$MB_RUNS_TEST" \
+  "" yes "s/and (p.revoked_at is null or p.revoked_at > run_started_at)//"
+
+run_control "collection run accepts a permission approved after the run start" \
+  "FAIL run used permission without a qualifying collect grant" "$MB_RUNS_TEST" \
+  "" yes "/and p.approved_at <= run_started_at/d"
+
+run_control "collection run ignores source access status" \
+  "FAIL run opened while the source is planned" "$MB_RUNS_TEST" \
+  "" yes "s/if mb_access_status not in ('approved', 'active') then/if false then/"
+
+run_control "finalized run can be finalized again" \
+  "FAIL a finalized run was finalized twice" "$MB_RUNS_TEST" \
+  "" yes "/and r.finished_at is null/d;/and r.status = 'failed'\$/d;s/and r.error_code = 'incomplete';/;/"
+
+run_control "artist cached without a collection run" \
+  "FAIL cached without a matching succeeded run" "$MB_RUNS_TEST" \
+  "" yes "s/raise exception 'musicbrainz_run_required' using errcode = '22023';/null;/"
 
 echo "${count} negative controls, ${failures} not caught"
 [ "$failures" -eq 0 ]
