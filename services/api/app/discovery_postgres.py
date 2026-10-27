@@ -172,12 +172,11 @@ class PostgresStore:
                 collection_run_key=run_keys[row["collection_run_id"]],
             )
             state["records"][rid] = record
-        state["unresolved"] = {}
-        for row in conn.execute("SELECT * FROM source_review_records ORDER BY source_record_id"):
-            # Run keys are derived, not stored in the observation, as for source_event_records.
-            state["unresolved"][str(row["source_record_id"])] = {
-                **row["observation"], "collection_run_key": run_keys[row["collection_run_id"]],
-            }
+        # Review items keep the declared observation exactly as ingest retained it.
+        state["unresolved"] = {
+            str(row["source_record_id"]): row["observation"]
+            for row in conn.execute("SELECT * FROM source_unresolved_records")
+        }
         return state
 
     def seed(self, fixture: dict, now: datetime) -> dict:
@@ -344,34 +343,25 @@ class PostgresStore:
                              VALUES (%s,%s,%s,%s)""",
                     (rid, p["artist_id"], p["role"], p["billing_order"]),
                 )
-        previous = before.get("unresolved", {})
-        current = state.get("unresolved", {})
-        for rid in previous.keys() - current.keys():
-            # A replay under a newly reviewed crosswalk resolved this observation.
-            conn.execute("DELETE FROM source_review_records WHERE source_record_id=%s", (rid,))
-        for rid, r in current.items():
-            if previous.get(rid) == r:
+        for rid, r in state["unresolved"].items():
+            if rid in before["unresolved"]:
                 continue
-            observation = {k: v for k, v in r.items() if k != "collection_run_key"}
             conn.execute(
-                """INSERT INTO source_review_records(source_record_id,source_id,permission_id,
-                         collection_run_id,vendor_event_id,title,reason,payload_hash,observation)
-                         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(source_record_id) DO UPDATE
-                         SET permission_id=excluded.permission_id,
-                         collection_run_id=excluded.collection_run_id,reason=excluded.reason,
-                         payload_hash=excluded.payload_hash,observation=excluded.observation""",
+                """INSERT INTO source_unresolved_records(source_record_id,source_id,permission_id,
+                         collection_run_id,reason,payload_hash,observation) VALUES (%s,%s,%s,%s,%s,%s,%s)""",
                 (
                     rid,
                     r["source_id"],
                     r["permission_id"],
                     uuid5(NAMESPACE, r["collection_run_key"]),
-                    r["vendor_event_id"],
-                    r["title"],
                     r["reason"],
                     r["payload_hash"],
-                    Jsonb(observation),
+                    Jsonb(r),
                 ),
             )
+        # A replay under a newly reviewed crosswalk resolves the item into source_event_records.
+        for rid in before["unresolved"].keys() - state["unresolved"].keys():
+            conn.execute("DELETE FROM source_unresolved_records WHERE source_record_id=%s", (rid,))
         conn.execute(
             "INSERT INTO discovery_state VALUES (true,'SS-DISCOVERY-DEMO-0.1',true) ON CONFLICT DO NOTHING"
         )

@@ -99,8 +99,8 @@ run_control "RLS disabled on source observations" \
   "alter table public.source_event_records disable row level security;"
 
 run_control "RLS disabled on review records" \
-  "public tables without row level security: source_review_records" "$RLS_TEST" \
-  "alter table public.source_review_records disable row level security;"
+  "public tables without row level security: source_unresolved_records" "$RLS_TEST" \
+  "alter table public.source_unresolved_records disable row level security;"
 
 run_control "permissive observation policy" \
   "discovery table has policies: source_event_records" "supabase/tests/discovery_contract_test.sql" \

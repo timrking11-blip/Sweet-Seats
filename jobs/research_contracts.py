@@ -46,13 +46,14 @@ def validate_approval(approval: dict, expected_digest: str, trusted_actors: set[
         raise ContractError("approval identity required")
 
 
-def validate_request(request: dict, approval: dict, policy: dict, now: datetime) -> str:
+def validate_request(request: dict, approval: dict, policy: dict, now: datetime, *,
+                     version: str = VERSION, extra_fields: frozenset = frozenset()) -> str:
     required = {"version", "team_id", "project_id", "issue_id", "request_id", "revision", "mode",
                 "brief", "classification", "allowed_use", "budget_cents", "timeout_seconds",
-                "expires_at", "retention_until"}
+                "expires_at", "retention_until"} | extra_fields
     if set(request) != required:
         raise ContractError("request fields do not match contract")
-    if request["version"] != VERSION:
+    if request["version"] != version:
         raise ContractError("unsupported contract version")
     if request["team_id"] not in policy["allowed_teams"] or request["project_id"] not in policy["allowed_projects"]:
         raise ContractError("scope denied")
