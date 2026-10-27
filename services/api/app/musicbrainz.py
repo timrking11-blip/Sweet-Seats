@@ -4,9 +4,19 @@ Policy (docs/governance.md, docs/provider-use.md): MusicBrainz is registered as 
 source (supabase/migrations/202610180001_musicbrainz_artist_cache.sql). A network call needs
 the 'collect' permission and a cache write needs 'derived_retention'; both are checked through
 public.source_use_is_permitted and fail closed until the owner approves a SourcePermission.
-Only identity fields are kept: MBID, name and disambiguation. Every network call records a
-public.collection_runs row (supabase/migrations/202610180002_musicbrainz_collection_runs.sql)
-with a fixed error code and a hashed or MBID-based logical key, never a name or payload.
+Only identity fields are kept: MBID, name and disambiguation.
+
+Provenance fails closed (supabase/migrations/202610180002_musicbrainz_collection_runs.sql).
+Before any network access the resolver opens a public.collection_runs row, which captures the
+exact SourcePermission that authorizes 'collect' at the run start; if the row cannot be opened
+there is no request. After the response it finalizes that same row. If finalizing fails the
+result is discarded, and a cache write needs the finalized, succeeded run. Rows carry a fixed
+error code and a hashed or MBID-based logical key, never a name or payload.
+
+Retries are attempts inside one collection run, not separate records: one logical request is
+one run, authorized by the permission captured when it opened. Retries are bounded by
+MAX_RETRIES, and a Retry-After longer than MAX_RETRY_AFTER_SECONDS fails the run instead of
+holding it open.
 
 The web service needs no API key for reads. It requires a User-Agent that names the app and
 a contact, and allows about one request per second per IP. The throttle here is per process;
@@ -27,7 +37,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Literal, Protocol
 from uuid import UUID, uuid4
 
@@ -40,6 +50,7 @@ APP_VERSION = "0.1.0"
 ADAPTER_VERSION = "musicbrainz-ws2-0.1"
 MIN_INTERVAL_SECONDS = 1.0
 MAX_RETRIES = 3
+MAX_RETRY_AFTER_SECONDS = 30.0
 SEARCH_LIMIT = 5
 # Confidence recorded on source_entity_mappings. A direct MBID lookup is certain; a unique
 # exact-name search hit is strong but can still be a namesake, so it stays below 1.
@@ -89,23 +100,21 @@ class CachedArtist(BaseModel):
 class Resolution(BaseModel):
     """cached: served from Supabase; resolved: fetched and cached; uncached: matched but
     retention is not permitted; ambiguous: needs review; not_found: no match.
-    run_recorded: None when no network call was made, False when the call's collection run
-    could not be recorded."""
+    collection_run_id: the finalized run that fetched this result; None when no network call
+    was made."""
 
     status: Literal["cached", "resolved", "uncached", "ambiguous", "not_found"]
     artist: CachedArtist | None = None
     candidates: list[ArtistCandidate] = []
-    run_recorded: bool | None = None
+    collection_run_id: UUID | None = None
 
 
-class CollectionRun(BaseModel):
-    """One public.collection_runs row for one MusicBrainz call."""
+class OpenRun(BaseModel):
+    """A public.collection_runs row opened before a MusicBrainz call, with the permission
+    that authorized it at started_at."""
 
-    logical_key: str
-    status: RunStatus
-    item_count: int
-    error_code: str | None = None
-    adapter_version: str = ADAPTER_VERSION
+    collection_run_id: UUID
+    permission_id: UUID
     started_at: datetime
 
 
@@ -223,7 +232,14 @@ class MusicBrainzClient:
                         code="upstream_unavailable",
                     )
                 retry_after = response.headers.get("retry-after", "")
-                self._sleep(float(retry_after) if retry_after.isdigit() else 2**attempt)
+                wait = float(retry_after) if retry_after.isdigit() else 2**attempt
+                if wait > MAX_RETRY_AFTER_SECONDS:
+                    # Honour the server by not retrying sooner; the run fails instead.
+                    raise MusicBrainzError(
+                        f"MusicBrainz returned {response.status_code} with a long Retry-After.",
+                        code="upstream_unavailable",
+                    )
+                self._sleep(wait)
                 continue
             if response.status_code != 200:
                 raise MusicBrainzError(
@@ -242,8 +258,13 @@ class ArtistCache(Protocol):
     def permitted(self, use: Use) -> bool: ...
     def by_mbid(self, mbid: UUID) -> CachedArtist | None: ...
     def by_name(self, name: str) -> list[CachedArtist]: ...
-    def store(self, artist: ArtistCandidate, *, confidence: float, method: str) -> CachedArtist: ...
-    def record_run(self, run: CollectionRun) -> None: ...
+    def store(
+        self, artist: ArtistCandidate, *, confidence: float, method: str, collection_run_id: UUID
+    ) -> CachedArtist: ...
+    def begin_run(self, logical_key: str) -> OpenRun: ...
+    def finish_run(
+        self, collection_run_id: UUID, status: RunStatus, item_count: int, error_code: str | None
+    ) -> None: ...
 
 
 class SupabaseArtistCache:
@@ -261,7 +282,9 @@ class SupabaseArtistCache:
         if service_key.startswith("eyJ"):
             self._headers["Authorization"] = f"Bearer {service_key}"
 
-    def _rpc(self, function: str, payload: dict[str, Any]) -> Any:
+    def _rpc(
+        self, function: str, payload: dict[str, Any], *, denied_use: Use = "derived_retention"
+    ) -> Any:
         try:
             response = self._http.post(
                 self._rpc_root + function, json=payload, headers=self._headers
@@ -269,10 +292,11 @@ class SupabaseArtistCache:
         except httpx.HTTPError as exc:
             raise MusicBrainzError("Could not reach Supabase.") from exc
         if response.status_code == 403:
-            raise SourceNotPermitted("derived_retention")
+            raise SourceNotPermitted(denied_use)
         if response.status_code >= 400:
             raise MusicBrainzError(f"Supabase RPC {function} returned {response.status_code}.")
-        return response.json()
+        # Void functions (finish_musicbrainz_run) answer 204 with no body.
+        return response.json() if response.content else None
 
     @staticmethod
     def _row(row: dict[str, Any]) -> CachedArtist:
@@ -296,7 +320,9 @@ class SupabaseArtistCache:
         rows = self._rpc("musicbrainz_artists_by_name", {"requested_name": name})
         return [self._row(row) for row in rows]
 
-    def store(self, artist: ArtistCandidate, *, confidence: float, method: str) -> CachedArtist:
+    def store(
+        self, artist: ArtistCandidate, *, confidence: float, method: str, collection_run_id: UUID
+    ) -> CachedArtist:
         self._rpc(
             "cache_musicbrainz_artist",
             {
@@ -305,6 +331,7 @@ class SupabaseArtistCache:
                 "artist_disambiguation": artist.disambiguation,
                 "confidence": confidence,
                 "method": method,
+                "run_id": str(collection_run_id),
             },
         )
         cached = self.by_mbid(artist.mbid)
@@ -312,16 +339,30 @@ class SupabaseArtistCache:
             raise MusicBrainzError("Cached MusicBrainz artist could not be read back.")
         return cached
 
-    def record_run(self, run: CollectionRun) -> None:
+    def begin_run(self, logical_key: str) -> OpenRun:
+        rows = self._rpc(
+            "begin_musicbrainz_run",
+            {"run_logical_key": logical_key, "run_adapter_version": ADAPTER_VERSION},
+            denied_use="collect",
+        )
+        try:
+            [row] = rows
+            return OpenRun.model_validate(row)
+        except (TypeError, ValueError) as exc:  # ValidationError is a ValueError.
+            raise MusicBrainzError(
+                "Supabase did not return the opened collection run.", code="run_not_opened"
+            ) from exc
+
+    def finish_run(
+        self, collection_run_id: UUID, status: RunStatus, item_count: int, error_code: str | None
+    ) -> None:
         self._rpc(
-            "record_musicbrainz_run",
+            "finish_musicbrainz_run",
             {
-                "run_logical_key": run.logical_key,
-                "run_status": run.status,
-                "run_item_count": run.item_count,
-                "run_error_code": run.error_code,
-                "run_adapter_version": run.adapter_version,
-                "run_started_at": run.started_at.isoformat(),
+                "run_id": str(collection_run_id),
+                "run_status": status,
+                "run_item_count": item_count,
+                "run_error_code": error_code,
             },
         )
 
@@ -333,61 +374,65 @@ class ArtistResolver:
         self._client = client
         self._cache = cache
 
-    def _require(self, use: Use) -> None:
-        if not self._cache.permitted(use):
-            raise SourceNotPermitted(use)
-
-    def _record(
-        self, key: str, status: RunStatus, count: int, code: str | None, started_at: datetime
-    ) -> bool:
-        """A recording failure never loses the lookup result: it is logged and reported as
-        Resolution.run_recorded=False."""
+    def _collect(
+        self, operation: Literal["search", "lookup"], subject: str | UUID, call: Callable[[], Any]
+    ) -> tuple[Any, UUID]:
+        """Opens the collection run, makes one logical network call (with its retries) and
+        finalizes that same run. Fails closed at both ends: no open run means no request, and
+        a result whose run cannot be finalized is discarded."""
         try:
-            self._cache.record_run(
-                CollectionRun(
-                    logical_key=key, status=status, item_count=count, error_code=code,
-                    started_at=started_at,
-                )
-            )
-        except Exception as exc:  # noqa: BLE001 - audit trouble must not discard the lookup.
-            log.warning(
-                "MusicBrainz collection run %s was not recorded (%s).",
-                key, getattr(exc, "code", type(exc).__name__),
-            )
-            return False
-        return True
-
-    def _collect(self, key: str, call: Callable[[], Any]) -> tuple[Any, bool]:
-        """Makes one network call and records its collection run, success or failure."""
-        started_at = datetime.now(UTC)
+            run = self._cache.begin_run(run_key(operation, subject))
+        except MusicBrainzError:
+            raise
+        except Exception as exc:
+            raise MusicBrainzError(
+                "MusicBrainz collection run could not be opened.", code="run_not_opened"
+            ) from exc
         try:
             result = call()
         except Exception as exc:
             code = exc.code if isinstance(exc, MusicBrainzError) else "unexpected_error"
-            self._record(key, "failed", 0, code, started_at)
+            try:
+                self._cache.finish_run(run.collection_run_id, "failed", 0, code)
+            except Exception as finish_exc:  # noqa: BLE001 - never mask the call failure.
+                # The row stays failed/'incomplete', which is still a failure.
+                log.warning(
+                    "MusicBrainz collection run %s was not finalized (%s).",
+                    run.collection_run_id, getattr(finish_exc, "code", type(finish_exc).__name__),
+                )
             raise
         count = len(result) if isinstance(result, list) else int(result is not None)
-        recorded = self._record(key, "succeeded" if count else "empty", count, None, started_at)
-        return result, recorded
+        try:
+            self._cache.finish_run(
+                run.collection_run_id, "succeeded" if count else "empty", count, None
+            )
+        except Exception as exc:
+            raise MusicBrainzError(
+                "MusicBrainz collection run could not be finalized; the result was discarded.",
+                code="run_not_finalized",
+            ) from exc
+        return result, run.collection_run_id
 
-    def _keep(self, artist: ArtistCandidate, *, confidence: float, method: str) -> Resolution:
+    def _keep(
+        self, artist: ArtistCandidate, *, confidence: float, method: str, run_id: UUID
+    ) -> Resolution:
         if not self._cache.permitted("derived_retention"):
-            return Resolution(status="uncached", candidates=[artist])
-        stored = self._cache.store(artist, confidence=confidence, method=method)
-        return Resolution(status="resolved", artist=stored)
+            return Resolution(status="uncached", candidates=[artist], collection_run_id=run_id)
+        stored = self._cache.store(
+            artist, confidence=confidence, method=method, collection_run_id=run_id
+        )
+        return Resolution(status="resolved", artist=stored, collection_run_id=run_id)
 
     def resolve_mbid(self, mbid: UUID) -> Resolution:
         cached = self._cache.by_mbid(mbid)
         if cached:
             return Resolution(status="cached", artist=cached)
-        self._require("collect")
-        artist, recorded = self._collect(
-            run_key("lookup", mbid), lambda: self._client.get_artist(mbid)
-        )
+        artist, run_id = self._collect("lookup", mbid, lambda: self._client.get_artist(mbid))
         if artist is None:
-            return Resolution(status="not_found", run_recorded=recorded)
-        resolution = self._keep(artist, confidence=LOOKUP_CONFIDENCE, method="musicbrainz-lookup")
-        return resolution.model_copy(update={"run_recorded": recorded})
+            return Resolution(status="not_found", collection_run_id=run_id)
+        return self._keep(
+            artist, confidence=LOOKUP_CONFIDENCE, method="musicbrainz-lookup", run_id=run_id
+        )
 
     def resolve_name(self, name: str) -> Resolution:
         name = _clean_name(name)
@@ -403,24 +448,23 @@ class ArtistResolver:
                 ],
             )
 
-        self._require("collect")
-        candidates, recorded = self._collect(
-            run_key("search", name), lambda: self._client.search_artists(name)
+        candidates, run_id = self._collect(
+            "search", name, lambda: self._client.search_artists(name)
         )
         if not candidates:
-            return Resolution(status="not_found", run_recorded=recorded)
+            return Resolution(status="not_found", collection_run_id=run_id)
         exact = [
             c for c in candidates if c.score == 100 and c.name.casefold() == name.casefold()
         ]
         if len(exact) != 1:
             # Namesakes or fuzzy hits need a person (or an MBID) to choose.
             return Resolution(
-                status="ambiguous", candidates=exact or candidates, run_recorded=recorded
+                status="ambiguous", candidates=exact or candidates, collection_run_id=run_id
             )
-        resolution = self._keep(
-            exact[0], confidence=EXACT_SEARCH_CONFIDENCE, method="musicbrainz-search-exact"
+        return self._keep(
+            exact[0], confidence=EXACT_SEARCH_CONFIDENCE, method="musicbrainz-search-exact",
+            run_id=run_id,
         )
-        return resolution.model_copy(update={"run_recorded": recorded})
 
 
 def from_env() -> ArtistResolver:

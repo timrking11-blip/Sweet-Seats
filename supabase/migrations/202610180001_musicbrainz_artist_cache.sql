@@ -82,13 +82,15 @@ as $$
 $$;
 
 -- Creates the artist and its MBID mapping in one transaction, or refreshes a provisional
--- artist that is already mapped. Reviewed artists keep their curated name.
+-- artist that is already mapped. Reviewed artists keep their curated name. run_id is the
+-- collection run that fetched the artist; see the check below.
 create or replace function public.cache_musicbrainz_artist(
   requested_mbid uuid,
   artist_name text,
   artist_disambiguation text,
   confidence numeric,
-  method text
+  method text,
+  run_id uuid
 ) returns uuid
 language plpgsql
 set search_path = public
@@ -106,6 +108,22 @@ begin
   select source_id into mb_source_id from public.sources where slug = 'musicbrainz';
   if mb_source_id is null or not public.source_use_is_permitted(mb_source_id, 'derived_retention') then
     raise exception 'musicbrainz_retention_not_permitted' using errcode = '42501';
+  end if;
+
+  -- Provenance first: a write needs the finalized, succeeded MusicBrainz collection run that
+  -- fetched this artist, opened under a captured permission (202610180002). A lookup run
+  -- must be for this MBID; a search run's key hashes the name, so any succeeded search run.
+  if not exists (
+    select 1 from public.collection_runs r
+    where r.collection_run_id = run_id
+      and r.source_id = mb_source_id
+      and r.status = 'succeeded'
+      and r.finished_at is not null
+      and r.permission_id is not null
+      and (r.logical_key like 'artist-search:%'
+           or r.logical_key like 'artist-lookup:' || requested_mbid::text || ':%')
+  ) then
+    raise exception 'musicbrainz_run_required' using errcode = '22023';
   end if;
 
   -- Serialize concurrent writers for the same MBID so only one artist row is created.
@@ -140,9 +158,9 @@ $$;
 revoke execute on function public.musicbrainz_use_is_permitted(text) from public, anon, authenticated;
 revoke execute on function public.musicbrainz_artist_by_mbid(uuid) from public, anon, authenticated;
 revoke execute on function public.musicbrainz_artists_by_name(text) from public, anon, authenticated;
-revoke execute on function public.cache_musicbrainz_artist(uuid, text, text, numeric, text)
+revoke execute on function public.cache_musicbrainz_artist(uuid, text, text, numeric, text, uuid)
   from public, anon, authenticated;
 grant execute on function public.musicbrainz_use_is_permitted(text) to service_role;
 grant execute on function public.musicbrainz_artist_by_mbid(uuid) to service_role;
 grant execute on function public.musicbrainz_artists_by_name(text) to service_role;
-grant execute on function public.cache_musicbrainz_artist(uuid, text, text, numeric, text) to service_role;
+grant execute on function public.cache_musicbrainz_artist(uuid, text, text, numeric, text, uuid) to service_role;

@@ -10,12 +10,13 @@ import pytest
 
 from app.musicbrainz import (
     ADAPTER_VERSION,
+    MAX_RETRY_AFTER_SECONDS,
     ArtistCandidate,
     ArtistResolver,
     CachedArtist,
-    CollectionRun,
     MusicBrainzClient,
     MusicBrainzError,
+    OpenRun,
     SourceNotPermitted,
     SupabaseArtistCache,
     run_key,
@@ -24,6 +25,7 @@ from app.musicbrainz import (
 
 MBID = UUID("6c7a9f0b-3c1e-4d5a-9a43-0d0b3e1f7a11")
 OTHER_MBID = UUID("0f3e2a1b-7c6d-4e5f-8a9b-1c2d3e4f5a6b")
+PERMISSION_ID = UUID("5d1f0c2e-8b3a-4f6d-9e7c-2a1b3c4d5e6f")
 UA = "SweetSeats/0.1.0 ( test@example.invalid )"
 
 
@@ -58,11 +60,17 @@ def no_network(request: httpx.Request) -> httpx.Response:
 
 
 class MemoryCache:
+    """Mirrors the database contract in 202610180001/202610180002: begin_run checks collect and
+    captures a permission, finish_run finalizes an open run once, and store needs that run
+    finalized as succeeded. events records the order of run and network activity."""
+
     def __init__(self, uses: set[str] = frozenset({"collect", "derived_retention"})) -> None:
         self.uses = set(uses)
         self.rows: dict[UUID, CachedArtist] = {}
-        self.runs: list[CollectionRun] = []
-        self.record_error: Exception | None = None
+        self.runs: dict[UUID, dict] = {}
+        self.events: list[tuple[str, object]] = []
+        self.begin_error: Exception | None = None
+        self.finish_error: Exception | None = None
 
     def permitted(self, use):
         return use in self.uses
@@ -73,7 +81,20 @@ class MemoryCache:
     def by_name(self, name):
         return [r for r in self.rows.values() if r.name.casefold() == name.strip().casefold()]
 
-    def store(self, artist: ArtistCandidate, *, confidence, method):
+    def seed(self, artist: ArtistCandidate) -> CachedArtist:
+        """A row cached by an earlier run."""
+        row = CachedArtist(
+            artist_id=uuid4(), mbid=artist.mbid, name=artist.name,
+            disambiguation=artist.disambiguation, mapping_confidence=0.9, mapping_method="m",
+        )
+        self.rows[artist.mbid] = row
+        return row
+
+    def store(self, artist: ArtistCandidate, *, confidence, method, collection_run_id):
+        run = self.runs.get(collection_run_id)
+        if not run or run["status"] != "succeeded" or not run["finished"]:
+            raise MusicBrainzError("no succeeded run", code="musicbrainz_run_required")
+        self.events.append(("store", collection_run_id))
         row = self.rows.get(artist.mbid) or CachedArtist(
             artist_id=uuid4(), mbid=artist.mbid, name=artist.name,
             disambiguation=artist.disambiguation, mapping_confidence=confidence,
@@ -82,10 +103,41 @@ class MemoryCache:
         self.rows[artist.mbid] = row
         return row
 
-    def record_run(self, run: CollectionRun):
-        if self.record_error:
-            raise self.record_error
-        self.runs.append(run)
+    def begin_run(self, logical_key):
+        if self.begin_error:
+            raise self.begin_error
+        if "collect" not in self.uses:
+            raise SourceNotPermitted("collect")
+        run = OpenRun(
+            collection_run_id=uuid4(), permission_id=PERMISSION_ID, started_at=datetime.now(UTC)
+        )
+        self.runs[run.collection_run_id] = {
+            "logical_key": logical_key, "permission_id": run.permission_id,
+            "status": "failed", "item_count": 0, "error_code": "incomplete", "finished": False,
+        }
+        self.events.append(("begin", run.collection_run_id))
+        return run
+
+    def finish_run(self, collection_run_id, status, item_count, error_code):
+        if self.finish_error:
+            raise self.finish_error
+        run = self.runs[collection_run_id]
+        assert not run["finished"], "a run is finalized once"
+        run.update(status=status, item_count=item_count, error_code=error_code, finished=True)
+        self.events.append(("finish", collection_run_id))
+
+    def finished(self):
+        return [r for r in self.runs.values() if r["finished"]]
+
+
+def tracked(cache: MemoryCache, handler):
+    """Wraps a handler so each HTTP attempt is logged in cache.events."""
+
+    def wrapper(request):
+        cache.events.append(("request", request.url.path))
+        return handler(request)
+
+    return wrapper
 
 
 def test_user_agent_requires_contact():
@@ -142,7 +194,7 @@ def test_unknown_mbid_is_none():
 
 def test_cached_name_skips_network_and_permission_check():
     cache = MemoryCache()
-    cache.store(ArtistCandidate(mbid=MBID, name="Test Artist"), confidence=0.9, method="m")
+    cache.seed(ArtistCandidate(mbid=MBID, name="Test Artist"))
     cache.uses = set()
     result = ArtistResolver(mb_client(no_network), cache).resolve_name("test artist")
     assert result.status == "cached" and result.artist.mbid == MBID
@@ -247,8 +299,8 @@ def test_supabase_cache_sends_bearer_for_legacy_jwt_keys():
     assert seen[0].headers["authorization"] == "Bearer eyJ.test"
 
 
-def test_supabase_store_writes_then_reads_back():
-    artist_id = uuid4()
+def test_supabase_store_writes_with_its_run_then_reads_back():
+    artist_id, run_id = uuid4(), uuid4()
     calls = []
 
     def handler(request):
@@ -264,21 +316,23 @@ def test_supabase_store_writes_then_reads_back():
 
     stored = supabase(handler).store(
         ArtistCandidate(mbid=MBID, name="Test Artist"), confidence=0.9,
-        method="musicbrainz-search-exact",
+        method="musicbrainz-search-exact", collection_run_id=run_id,
     )
     assert stored.artist_id == artist_id and stored.mapping_confidence == 0.9
     assert calls[0] == ("cache_musicbrainz_artist", {
         "requested_mbid": str(MBID), "artist_name": "Test Artist", "artist_disambiguation": None,
-        "confidence": 0.9, "method": "musicbrainz-search-exact",
+        "confidence": 0.9, "method": "musicbrainz-search-exact", "run_id": str(run_id),
     })
     assert calls[1][0] == "musicbrainz_artist_by_mbid"
 
 
 def test_supabase_permission_denied_maps_to_source_not_permitted():
-    with pytest.raises(SourceNotPermitted):
+    with pytest.raises(SourceNotPermitted) as exc:
         supabase(lambda r: httpx.Response(403, json={"code": "42501"})).store(
-            ArtistCandidate(mbid=MBID, name="Test Artist"), confidence=1.0, method="m"
+            ArtistCandidate(mbid=MBID, name="Test Artist"), confidence=1.0, method="m",
+            collection_run_id=uuid4(),
         )
+    assert exc.value.use == "derived_retention"
 
 
 def test_supabase_cache_requires_configuration():
@@ -286,7 +340,8 @@ def test_supabase_cache_requires_configuration():
         SupabaseArtistCache("", "")
 
 
-# Collection runs: every network call records exactly one run; cache hits and denials record none.
+# Collection runs: one logical network request is one run, opened before the request and
+# finalized after it. Cache hits and denials open none.
 
 # Mirrors the logical_key check in 202610180002_musicbrainz_collection_runs.sql.
 RUN_KEY = re.compile(
@@ -298,42 +353,45 @@ def name_hash(name):
     return hashlib.sha256(name.casefold().encode()).hexdigest()
 
 
-def test_search_records_succeeded_run_without_the_name():
-    handler = lambda r: httpx.Response(200, json={"artists": [
-        artist_json(), artist_json(OTHER_MBID, "Test Artists", score=88)]})
+def test_run_is_opened_before_the_request_and_that_row_is_finalized():
     cache = MemoryCache()
+    handler = tracked(cache, lambda r: httpx.Response(200, json={"artists": [
+        artist_json(), artist_json(OTHER_MBID, "Test Artists", score=88)]}))
     result = ArtistResolver(mb_client(handler), cache).resolve_name("Test Artist")
 
-    assert result.status == "resolved" and result.run_recorded is True
-    [run] = cache.runs
-    assert (run.status, run.item_count, run.error_code) == ("succeeded", 2, None)
-    assert run.adapter_version == ADAPTER_VERSION
-    assert RUN_KEY.match(run.logical_key)
-    assert run.logical_key.startswith(f"artist-search:{name_hash('test artist')}:")
-    assert "test" not in run.logical_key.casefold().replace(name_hash("test artist"), "")
-    assert run.started_at.tzinfo is not None and run.started_at <= datetime.now(UTC)
+    [(run_id, run)] = cache.runs.items()
+    assert [kind for kind, _ in cache.events] == ["begin", "request", "finish", "store"]
+    assert cache.events[0][1] == cache.events[2][1] == cache.events[3][1] == run_id
+    assert result.status == "resolved" and result.collection_run_id == run_id
+    assert (run["status"], run["item_count"], run["error_code"]) == ("succeeded", 2, None)
+    assert run["permission_id"] == PERMISSION_ID
+    assert RUN_KEY.match(run["logical_key"])
+    assert run["logical_key"].startswith(f"artist-search:{name_hash('test artist')}:")
+    assert "test" not in run["logical_key"].casefold().replace(name_hash("test artist"), "")
 
 
-def test_ambiguous_search_still_records_its_run():
+def test_ambiguous_search_still_finalizes_its_run():
     handler = lambda r: httpx.Response(200, json={"artists": [
         artist_json(MBID, disambiguation="US rapper"),
         artist_json(OTHER_MBID, disambiguation="UK band"),
     ]})
     cache = MemoryCache()
     result = ArtistResolver(mb_client(handler), cache).resolve_name("Test Artist")
-    assert result.status == "ambiguous" and result.run_recorded is True
-    assert [(r.status, r.item_count) for r in cache.runs] == [("succeeded", 2)]
+    assert result.status == "ambiguous" and result.collection_run_id in cache.runs
+    assert [(r["status"], r["item_count"]) for r in cache.finished()] == [("succeeded", 2)]
 
 
-def test_search_without_hits_records_empty_run():
+def test_search_without_hits_finalizes_empty_run():
     cache = MemoryCache()
     handler = lambda r: httpx.Response(200, json={"artists": []})
     result = ArtistResolver(mb_client(handler), cache).resolve_name("Nobody")
-    assert result.status == "not_found" and result.run_recorded is True
-    assert [(r.status, r.item_count, r.error_code) for r in cache.runs] == [("empty", 0, None)]
+    assert result.status == "not_found" and result.collection_run_id in cache.runs
+    assert [(r["status"], r["item_count"], r["error_code"]) for r in cache.finished()] == [
+        ("empty", 0, None)
+    ]
 
 
-def test_lookup_records_runs_keyed_by_mbid():
+def test_lookup_runs_are_keyed_by_mbid():
     cache = MemoryCache()
     found = ArtistResolver(mb_client(lambda r: httpx.Response(200, json=artist_json())), cache)
     missing = ArtistResolver(mb_client(lambda r: httpx.Response(404)), cache)
@@ -341,19 +399,20 @@ def test_lookup_records_runs_keyed_by_mbid():
     assert found.resolve_mbid(MBID).status == "resolved"
     assert missing.resolve_mbid(OTHER_MBID).status == "not_found"
 
-    assert [(r.status, r.item_count) for r in cache.runs] == [("succeeded", 1), ("empty", 0)]
-    assert cache.runs[0].logical_key.startswith(f"artist-lookup:{MBID}:")
-    assert cache.runs[1].logical_key.startswith(f"artist-lookup:{OTHER_MBID}:")
-    assert all(RUN_KEY.match(r.logical_key) for r in cache.runs)
+    runs = list(cache.runs.values())
+    assert [(r["status"], r["item_count"]) for r in runs] == [("succeeded", 1), ("empty", 0)]
+    assert runs[0]["logical_key"].startswith(f"artist-lookup:{MBID}:")
+    assert runs[1]["logical_key"].startswith(f"artist-lookup:{OTHER_MBID}:")
+    assert all(RUN_KEY.match(r["logical_key"]) for r in runs)
 
 
-def test_uncached_match_records_run():
+def test_uncached_match_finalizes_run():
     cache = MemoryCache(uses={"collect"})
     result = ArtistResolver(
         mb_client(lambda r: httpx.Response(200, json=artist_json())), cache
     ).resolve_mbid(MBID)
-    assert result.status == "uncached" and result.run_recorded is True
-    assert [r.status for r in cache.runs] == ["succeeded"]
+    assert result.status == "uncached" and result.collection_run_id in cache.runs
+    assert [r["status"] for r in cache.finished()] == ["succeeded"]
 
 
 @pytest.mark.parametrize(
@@ -365,70 +424,144 @@ def test_uncached_match_records_run():
         (lambda r: httpx.Response(200, json={"secret": "shape"}), "unexpected_shape"),
     ],
 )
-def test_failed_lookup_records_fixed_error_code_and_reraises(handler, code):
+def test_failed_lookup_finalizes_fixed_error_code_and_reraises(handler, code):
     cache = MemoryCache()
     with pytest.raises(MusicBrainzError) as exc:
         ArtistResolver(mb_client(handler), cache).resolve_mbid(MBID)
     assert exc.value.code == code
-    [run] = cache.runs
-    assert (run.status, run.item_count, run.error_code) == ("failed", 0, code)
-    assert "secret" not in run.model_dump_json()
+    [run] = cache.finished()
+    assert (run["status"], run["item_count"], run["error_code"]) == ("failed", 0, code)
+    assert "secret" not in json.dumps(run, default=str)
     assert cache.rows == {}
 
 
-def test_unreachable_search_records_network_error():
+def test_unreachable_search_finalizes_network_error():
     def handler(request):
         raise httpx.ConnectError("secret resolver detail", request=request)
 
     cache = MemoryCache()
     with pytest.raises(MusicBrainzError, match="Could not reach"):
         ArtistResolver(mb_client(handler), cache).resolve_name("Test Artist")
-    assert [(r.status, r.error_code) for r in cache.runs] == [("failed", "network_error")]
+    assert [(r["status"], r["error_code"]) for r in cache.finished()] == [
+        ("failed", "network_error")
+    ]
 
 
-def test_unexpected_exception_records_generic_code_and_propagates():
+def test_unexpected_exception_finalizes_generic_code_and_propagates():
     def handler(request):
         raise ValueError("secret bug detail")
 
     cache = MemoryCache()
     with pytest.raises(ValueError):
         ArtistResolver(mb_client(handler), cache).resolve_name("Test Artist")
-    assert [(r.status, r.error_code) for r in cache.runs] == [("failed", "unexpected_error")]
+    assert [(r["status"], r["error_code"]) for r in cache.finished()] == [
+        ("failed", "unexpected_error")
+    ]
 
 
-def test_cache_hits_and_denials_record_no_run():
+def test_cache_hits_and_denials_open_no_run():
     cache = MemoryCache()
-    cache.store(ArtistCandidate(mbid=MBID, name="Test Artist"), confidence=0.9, method="m")
+    cache.seed(ArtistCandidate(mbid=MBID, name="Test Artist"))
     resolver = ArtistResolver(mb_client(no_network), cache)
-    assert resolver.resolve_name("Test Artist").run_recorded is None
-    assert resolver.resolve_mbid(MBID).run_recorded is None
+    assert resolver.resolve_name("Test Artist").collection_run_id is None
+    assert resolver.resolve_mbid(MBID).collection_run_id is None
 
     denied = MemoryCache(uses=set())
     with pytest.raises(SourceNotPermitted):
         ArtistResolver(mb_client(no_network), denied).resolve_name("Test Artist")
-    assert cache.runs == [] and denied.runs == []
+    assert cache.runs == {} and denied.runs == {}
 
 
-def test_run_recording_failure_keeps_the_lookup_result(caplog):
+@pytest.mark.parametrize(
+    "error",
+    [MusicBrainzError("Supabase RPC begin_musicbrainz_run returned 500."), RuntimeError("down")],
+)
+def test_run_that_cannot_be_opened_means_no_request_and_no_cache_write(error):
     cache = MemoryCache()
-    cache.record_error = MusicBrainzError("Supabase RPC record_musicbrainz_run returned 500.")
-    resolver = ArtistResolver(mb_client(lambda r: httpx.Response(200, json=artist_json())), cache)
-
-    with caplog.at_level(logging.WARNING, logger="app.musicbrainz"):
-        result = resolver.resolve_mbid(MBID)
-
-    assert result.status == "resolved" and result.artist.mbid == MBID
-    assert result.run_recorded is False
-    assert "was not recorded (musicbrainz_error)" in caplog.text
-
-
-def test_run_recording_failure_does_not_mask_the_call_failure():
-    cache = MemoryCache()
-    cache.record_error = RuntimeError("supabase down")
-    resolver = ArtistResolver(mb_client(lambda r: httpx.Response(502)), cache)
+    cache.begin_error = error
+    resolver = ArtistResolver(mb_client(no_network), cache)
     with pytest.raises(MusicBrainzError) as exc:
         resolver.resolve_mbid(MBID)
+    if not isinstance(error, MusicBrainzError):
+        assert exc.value.code == "run_not_opened"
+    with pytest.raises(MusicBrainzError):
+        resolver.resolve_name("Test Artist")
+    assert cache.events == [] and cache.rows == {}
+
+
+def test_result_whose_run_cannot_be_finalized_is_discarded_and_not_cached():
+    cache = MemoryCache()
+    cache.finish_error = MusicBrainzError("Supabase RPC finish_musicbrainz_run returned 500.")
+    resolver = ArtistResolver(mb_client(lambda r: httpx.Response(200, json=artist_json())), cache)
+    with pytest.raises(MusicBrainzError) as exc:
+        resolver.resolve_mbid(MBID)
+    assert exc.value.code == "run_not_finalized"
+    assert cache.rows == {}
+    assert [kind for kind, _ in cache.events] == ["begin"]
+
+
+def test_finalize_failure_does_not_mask_the_call_failure(caplog):
+    cache = MemoryCache()
+    cache.finish_error = RuntimeError("supabase down")
+    resolver = ArtistResolver(mb_client(lambda r: httpx.Response(502)), cache)
+    with caplog.at_level(logging.WARNING, logger="app.musicbrainz"), pytest.raises(
+        MusicBrainzError
+    ) as exc:
+        resolver.resolve_mbid(MBID)
     assert exc.value.code == "upstream_unavailable"
+    assert "was not finalized (RuntimeError)" in caplog.text
+
+
+def test_store_needs_a_finalized_succeeded_run():
+    cache = MemoryCache()
+    run = cache.begin_run(run_key("lookup", MBID))
+    artist = ArtistCandidate(mbid=MBID, name="Test Artist")
+    with pytest.raises(MusicBrainzError):
+        cache.store(artist, confidence=1.0, method="m", collection_run_id=run.collection_run_id)
+    with pytest.raises(MusicBrainzError):
+        cache.store(artist, confidence=1.0, method="m", collection_run_id=uuid4())
+    assert cache.rows == {}
+
+
+def test_retries_are_attempts_inside_one_run():
+    clock = FakeClock()
+    cache = MemoryCache()
+    responses = iter([httpx.Response(503, headers={"Retry-After": "2"}),
+                      httpx.Response(503),
+                      httpx.Response(200, json=artist_json())])
+    handler = tracked(cache, lambda r: next(responses))
+    result = ArtistResolver(mb_client(handler, clock), cache).resolve_mbid(MBID)
+
+    assert result.status == "resolved"
+    assert [kind for kind, _ in cache.events] == [
+        "begin", "request", "request", "request", "finish", "store"]
+    [(run_id, run)] = cache.runs.items()
+    assert result.collection_run_id == run_id
+    assert (run["status"], run["item_count"]) == ("succeeded", 1)
+
+
+def test_exhausted_retries_finalize_one_failed_run():
+    cache = MemoryCache()
+    handler = tracked(cache, lambda r: httpx.Response(503))
+    with pytest.raises(MusicBrainzError, match="after retries"):
+        ArtistResolver(mb_client(handler), cache).resolve_mbid(MBID)
+    kinds = [kind for kind, _ in cache.events]
+    assert kinds == ["begin"] + ["request"] * 4 + ["finish"]
+    assert [(r["status"], r["error_code"]) for r in cache.runs.values()] == [
+        ("failed", "upstream_unavailable")
+    ]
+
+
+def test_long_retry_after_fails_the_run_instead_of_holding_it_open():
+    clock = FakeClock()
+    cache = MemoryCache()
+    wait = str(int(MAX_RETRY_AFTER_SECONDS) + 1)
+    handler = tracked(cache, lambda r: httpx.Response(429, headers={"Retry-After": wait}))
+    with pytest.raises(MusicBrainzError) as exc:
+        ArtistResolver(mb_client(handler, clock), cache).resolve_mbid(MBID)
+    assert exc.value.code == "upstream_unavailable"
+    assert [kind for kind, _ in cache.events] == ["begin", "request", "finish"]
+    assert all(s < MAX_RETRY_AFTER_SECONDS for s in clock.sleeps)
 
 
 def test_run_keys_hash_the_normalized_name_and_are_unique_per_call():
@@ -438,23 +571,54 @@ def test_run_keys_hash_the_normalized_name_and_are_unique_per_call():
     assert all(RUN_KEY.match(k) for k in (first, second, run_key("lookup", MBID)))
 
 
-def test_supabase_record_run_calls_rpc_with_fixed_fields():
+def test_supabase_begin_run_returns_the_captured_permission():
     seen = []
+    run_id = uuid4()
 
     def handler(request):
         seen.append(request)
-        return httpx.Response(200, json=str(uuid4()))
+        return httpx.Response(200, json=[{
+            "collection_run_id": str(run_id), "permission_id": str(PERMISSION_ID),
+            "started_at": "2026-10-18T12:00:00+00:00",
+        }])
 
-    started = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
     key = run_key("lookup", MBID)
-    supabase(handler).record_run(CollectionRun(
-        logical_key=key, status="failed", item_count=0, error_code="network_error",
-        started_at=started,
-    ))
-    request = seen[0]
-    assert request.url.path == "/rest/v1/rpc/record_musicbrainz_run"
-    assert json.loads(request.content) == {
-        "run_logical_key": key, "run_status": "failed", "run_item_count": 0,
-        "run_error_code": "network_error", "run_adapter_version": ADAPTER_VERSION,
-        "run_started_at": "2026-10-18T12:00:00+00:00",
+    run = supabase(handler).begin_run(key)
+    assert run == OpenRun(collection_run_id=run_id, permission_id=PERMISSION_ID,
+                          started_at=datetime(2026, 10, 18, 12, 0, tzinfo=UTC))
+    assert seen[0].url.path == "/rest/v1/rpc/begin_musicbrainz_run"
+    assert json.loads(seen[0].content) == {
+        "run_logical_key": key, "run_adapter_version": ADAPTER_VERSION,
+    }
+
+
+@pytest.mark.parametrize(
+    "body",
+    [[], [{"collection_run_id": str(uuid4()), "permission_id": None,
+           "started_at": "2026-10-18T12:00:00+00:00"}], {"unexpected": True}],
+)
+def test_supabase_begin_run_rejects_a_run_without_its_permission(body):
+    with pytest.raises(MusicBrainzError) as exc:
+        supabase(lambda r: httpx.Response(200, json=body)).begin_run(run_key("lookup", MBID))
+    assert exc.value.code == "run_not_opened"
+
+
+def test_supabase_begin_run_denial_is_a_collect_denial():
+    with pytest.raises(SourceNotPermitted) as exc:
+        supabase(lambda r: httpx.Response(403, json={"code": "42501"})).begin_run(
+            run_key("lookup", MBID)
+        )
+    assert exc.value.use == "collect"
+
+
+def test_supabase_finish_run_calls_rpc_with_fixed_fields():
+    seen = []
+    run_id = uuid4()
+    supabase(lambda r: seen.append(r) or httpx.Response(204)).finish_run(
+        run_id, "failed", 0, "network_error"
+    )
+    assert seen[0].url.path == "/rest/v1/rpc/finish_musicbrainz_run"
+    assert json.loads(seen[0].content) == {
+        "run_id": str(run_id), "run_status": "failed", "run_item_count": 0,
+        "run_error_code": "network_error",
     }
