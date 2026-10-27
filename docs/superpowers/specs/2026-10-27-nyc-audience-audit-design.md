@@ -96,7 +96,7 @@ One row per reading revision. Rows are append-only within the permitted retentio
 
 | Group | Columns | Rules |
 | --- | --- | --- |
-| Identity | `observation_id`, `observation_key`, `revision`, `content_hash` | See 4.2 |
+| Identity | `observation_id`, `observation_key`, `revision`, `content_hash` | Unique `(observation_key, revision)`; see 4.2 |
 | Artist | `artist_id`, `artist_mapping_version_id`, `vendor_artist_id` | Mapping version must be reviewed and from the same source |
 | Metric | `metric_definition_id` → `platform`, `metric_key`, `unit`, `window_kind` (`rolling`, `point`), `window_days`, `definition_version`, `expected_cadence` (nullable), `period_timezone` (IANA name or `unknown`), `jump_abs_floor` | Definitions are immutable versioned rows |
 | Geography | `vendor_location_id` (nullable), `vendor_location_label`, `geography_mapping_version_id` (nullable) | Raw vendor values are always kept |
@@ -111,21 +111,43 @@ Raw provider payloads are never stored; only `payload_hash` is kept.
 
 ### 4.2 Replay and correction identity
 
-- `observation_key` is a stable identity supplied by the collector for one reading:
-  source, vendor artist, metric definition, vendor location and measured period.
-  `content_hash` is separate and covers the value, method and time fields.
-- Same `observation_key` and same `content_hash`: no-op.
-- Same `observation_key` and different `content_hash`: rejected
-  (`changed_content_at_same_key`).
-- A correction is a new observation with a new key and `corrects_observation_id`
-  pointing at its target. Rules:
-  - `corrects_observation_id` is unique, so each reading has at most one correction and
-    chains cannot branch.
-  - The target must be in the same series (artist, metric definition, geography mapping
-    and vendor location) and must already be published, so chains cannot loop.
-  - Cross-series corrections are rejected.
-- The **effective** reading of a chain at a watermark is the latest member published at
-  or below that watermark.
+A **reading** is one value for one series and one measured period. Its revisions are
+the original value and every later correction of it.
+
+- `observation_key` identifies the reading, not a revision. The collector derives it
+  from the source, vendor artist, metric definition, vendor location, `measured_from`
+  and `measured_to`. Every revision of a reading shares the same `observation_key`.
+- `revision` is assigned by the ingest function, never by the collector. The first
+  accepted value is revision 1. Each correction is the current head's revision plus 1.
+  `(observation_key, revision)` is unique.
+- `content_hash` covers the value, `missing_reason`, method, imputation and time fields
+  of one revision.
+
+Ingest decides under a transaction-level advisory lock on `observation_key`, so
+concurrent writers of the same reading serialize:
+
+| Incoming row | Existing revisions of the key | Result |
+| --- | --- | --- |
+| Any | None | Accepted as revision 1 |
+| `content_hash` equals any existing revision | Any | No-op (replay of that revision) |
+| New `content_hash`, no correction target | One or more | Rejected: `changed_content_at_same_key` |
+| New `content_hash`, `corrects_observation_id` = current head, head published | One or more | Accepted as head revision + 1 |
+| New `content_hash`, target is not the head | One or more | Rejected: `correction_target_not_head` |
+| New `content_hash`, head not yet published | One or more | Rejected: `correction_target_unpublished` |
+| Target belongs to a different `observation_key` | Any | Rejected: `cross_reading_correction` |
+
+So when the source, artist, metric, location and measured period are all unchanged, the
+key stays the same and only the revision moves. Each revision has its own
+`observation_id`. The collector cannot choose a revision number, skip one or fork a
+chain. `corrects_observation_id` is unique and must name the head of the same key, so
+chains are linear and cannot branch or loop.
+
+A different measured period, metric definition, vendor location or vendor artist is a
+different reading with a new key, never a correction.
+
+The **effective** reading of a key at a watermark is its highest revision with
+`publication_id ≤ watermark`. Audit inputs and feature eligibility always name the exact
+`(observation_key, revision, content_hash)`.
 
 ### 4.3 Timestamp semantics
 
@@ -185,7 +207,8 @@ soon as a permission is missing, expired, revoked or not yet approved; purge (8)
 | Role | May do |
 | --- | --- |
 | Migration owner | Owns tables and `SECURITY DEFINER` functions |
-| `audience_writer` | Execute ingest, publish, failure-record and audit-result-submit functions only |
+| `audience_writer` | Execute ingest, publish, failure-record and audit-proposal functions only |
+| `audience_verifier` | Execute snapshot read and verified-audit record functions only; used only by the verifier worker (7.5) |
 | `audience_auditor` | Execute snapshot read, metadata inspection and audit-run read functions only |
 | `anon`, `authenticated`, `PUBLIC` | Nothing on these tables or functions |
 
@@ -196,6 +219,8 @@ soon as a permission is missing, expired, revoked or not yet approved; purge (8)
 - Function arguments select scope only (run, snapshot, spec IDs). No argument can widen
   a use, skip a permission check or name a table.
 - The writer cannot call read functions; the auditor cannot call write functions.
+- Only `audience_verifier` can execute `audience_record_verified_audit`. The writer, the
+  auditor, the audit CLI and the agent never hold that role's credential.
 
 ## 7. Audit
 
@@ -253,7 +278,7 @@ rules mark a change or gap that deserves attention; the data stays usable.
 | `CORR-001` | Investigate | A chain has more than two corrections, or a correction changes the value by ≥ 25% of the original (original zero: only `jump_abs_floor` applies) |
 | `MISS-001` | Info | Missing-value rate by provider, metric and `missing_reason` |
 
-Ordering for consecutive readings: `(measured_to, measured_from, observation_key)`.
+Ordering for consecutive readings: `(measured_to, measured_from, observation_key)`, using each key's effective revision.
 Thresholds in `audience-thresholds` v0.1 are **provisional** and need backtesting before
 any user-facing use.
 
@@ -264,7 +289,7 @@ any user-facing use.
   geography for coverage findings. Tracks `first_seen_run`, `last_seen_run`, `status`.
 - **Occurrence**: immutable per-run evidence for an issue.
 - Status values: `open`, `unassessed`, `resolved`, `waived`, `closed_by_purge`.
-  - `resolved` only when a successful run's manifest re-covers the issue's scope and the
+  - `resolved` only when a succeeded run's manifest re-covers the issue's scope and the
     rule does not fire. Absence is not proof of resolution.
   - A failed run, or a run that lacks the scope's inputs, sets `unassessed` and keeps the
     issue open.
@@ -274,16 +299,47 @@ any user-facing use.
 
 ### 7.5 Verified result submission
 
-1. The audit CLI (`python -m app.audience_audit --snapshot <id>`) builds the manifest and
-   evaluates the rules as pure Python over the manifest's inputs, producing a findings
-   document.
-2. The writer submit function verifies the manifest hash, rule IDs and evidence
-   references, then **recomputes the rules with trusted application code from the bound
-   inputs** and compares results finding by finding, including passes. Any difference
-   marks the run `failed (result_mismatch)`.
-3. On success it stores the run, issues, occurrences and one `audit_assessed_inputs` row
-   per reading (`observation_key`, `revision`, `content_hash`, mapping versions,
-   metric definition version, threshold set, feature-spec version, assessment result).
+Submitted findings are an untrusted proposal. Only the verifier's independent result
+counts, and the database rejects any verified result it can disprove.
+
+1. **Proposal.** The audit CLI (`python -m app.audience_audit --snapshot <id>`) builds
+   the manifest, evaluates the rules and calls `audience_propose_audit` as
+   `audience_writer`. This stores the run as `proposed` with its findings document. A
+   proposed run grants nothing: it cannot resolve issues and cannot make inputs eligible.
+2. **Trusted recomputation.** A separate verifier worker
+   (`python -m app.audience_verify`) runs server-side with the `audience_verifier`
+   credential. It does not read the proposal's inputs. Instead it:
+   - rebuilds the manifest from the stored snapshot through the read functions;
+   - evaluates the rules with the rule engine pinned by `rule_set_version`;
+   - compares its findings with the proposal, finding by finding, including passes.
+
+   Any difference records the run as `failed (result_mismatch)`. The rule engine is a pure
+   module with no network or filesystem access. Its source hash is registered against the
+   rule-set version in `audit_rule_implementations` by migration, and the worker refuses
+   to run if its loaded code does not match.
+3. **Database checks on record.** `audience_record_verified_audit` (verifier only)
+   rejects the result unless all of these hold:
+   - **Same manifest.** The manifest hash equals the hash the function computes in SQL
+     from the stored snapshot, watermark and version rows.
+   - **Complete inputs.** The assessed-input set equals the snapshot's full set of
+     effective `(observation_key, revision, content_hash)` for the tracked artists.
+     Nothing may be omitted or added.
+   - **Complete results.** Every rule in the rule set has exactly one result (`pass`,
+     `fire` or `unassessed`) for every scope it covers.
+   - **Matching Hard controls.** The function recomputes PERM-001, PERM-002, MAP-001 and
+     TIME-001 in SQL, from the same rows, and they must match the submitted results.
+   - **Current versions.** The rule-set and threshold-set versions are the current ones.
+4. **Store.** On success, the run becomes `succeeded` and the function stores its issues,
+   occurrences and one `audit_assessed_inputs` row per reading (`observation_key`,
+   `revision`, `content_hash`, mapping versions, metric definition version, threshold set,
+   feature-spec version, assessment result). Only `succeeded` runs count in 7.4 and 7.6.
+
+**Residual trust.** A compromised verifier could still misreport an Investigate rule, but
+it cannot:
+- hide an input, because the input set is completeness-checked;
+- clear a Hard control, because those are recomputed in SQL and are also enforced
+  directly by the read functions;
+- record a result for a manifest the database did not derive.
 
 The agent's narrative is never compared or trusted.
 
@@ -294,7 +350,7 @@ The agent's narrative is never compared or trusted.
 1. Hard controls pass now, including a fresh permission check for `feature` (or `train` /
    `test` for those reads).
 2. The exact `observation_key`, `revision` and `content_hash` appear in
-   `audit_assessed_inputs` of a **successful** run whose rule set, threshold set, metric
+   `audit_assessed_inputs` of a **succeeded** (verifier-recorded, 7.5) run whose rule set, threshold set, metric
    definition version, mapping versions and feature-spec version all equal the current
    ones. A watermark alone is not sufficient; an `unassessed` result grants nothing.
 3. The row fits the spec (`DEF-001`).
@@ -350,7 +406,8 @@ path for sources and terms.
 | `docs/contracts/audience-observation-v0.1.md` | Contract summary for collectors |
 | `docs/skills/audience-auditor.md` | Auditor agent role |
 | `services/api/app/audience.py` | Fixture validation, ingest, publish and snapshot clients |
-| `services/api/app/audience_audit.py` | Pure rule engine and audit CLI |
+| `services/api/app/audience_audit.py` | Pure rule engine and audit (proposal) CLI |
+| `services/api/app/audience_verify.py` | Verifier worker: trusted recomputation and record |
 | `supabase/migrations/<timestamp>_audience_observations.sql` | Tables, roles, functions, grants |
 | `supabase/tests/audience_*.sql` | Database contract tests |
 | `services/api/tests/test_audience*.py` | Python and PostgreSQL acceptance tests |
@@ -364,21 +421,22 @@ timeouts.
 | # | Guarantee | Test |
 | --- | --- | --- |
 | T1 | Fixture contract | Unknown fields, unreviewed or stale mapping versions, null value without reason, and wrong unit are rejected with fixed codes |
-| T2 | Replay | Identical replay is a no-op; same key with changed content fails; a correction gets a new key and links back |
-| T3 | Correction chains | Cross-series, branching, looping and unpublished-target corrections are rejected; equal-period ordering is deterministic |
+| T2 | Replay and revisions | Identical replay of any revision is a no-op; same key with changed content and no target fails; a correction keeps the key, gets head revision + 1 and links to the head; a collector-supplied revision is ignored |
+| T3 | Correction chains | Cross-reading, non-head (branching), looping and unpublished-target corrections are rejected with their fixed codes; two concurrent corrections of one head yield exactly one revision; equal-period ordering is deterministic |
 | T4 | Atomic ingest and failure record | A mid-run failure leaves no rows and a separate failed-attempt record; a simulated recording failure yields `failure_not_recorded` |
 | T5 | Publish revalidation and races | Revocation or mapping rejection between ingest and publish stops publication. Publication racing revocation: exactly one ordering wins and the result is consistent. Two writers submitting the same replay or the same correction: one succeeds, the other is a no-op or a fixed rejection. |
 | T6 | Watermark | A publish holds the lock past the snapshot request; the snapshot waits and captures a watermark that includes it; a rebuild from the stored watermark is identical; publication IDs are monotonic |
-| T7 | Privileges and function security | `anon`, `authenticated` and the auditor cannot select from tables; `PUBLIC` cannot execute privileged functions; the writer cannot call read functions; the auditor can call only read and metadata functions; arguments cannot widen scope; a caller-manipulated `search_path` (shadow objects in a caller-owned schema) cannot redirect a function |
+| T7 | Privileges and function security | `anon`, `authenticated` and the auditor cannot select from tables; `PUBLIC` cannot execute privileged functions; the writer cannot call read functions; the auditor can call only read and metadata functions; only `audience_verifier` can call `audience_record_verified_audit`; arguments cannot widen scope; a caller-manipulated `search_path` (shadow objects in a caller-owned schema) cannot redirect a function |
 | T8 | Permission gating | `collect`, `derived_retention`, `display`, `feature`, `train`, `test` and `internal_audit` are each denied independently when missing, expired, future or revoked; mismatched source, run and permission references are rejected |
 | T9 | Rule engine | One fixture per rule fires exactly the expected issue keys, including: 0–180 local-date window edges, postponed with and without a date, cancelled, completed, date-only show, zero denominator, missing pair, unknown cadence, unknown zone |
 | T10 | Determinism | The same manifest produces byte-identical findings across runs |
-| T11 | Recompute check | A submitted result with one finding removed, or one pass flipped, fails with `result_mismatch` |
+| T11 | Recompute check | A proposal with one finding removed, or one pass flipped, is recorded as `failed (result_mismatch)`; a proposed run grants no eligibility and resolves no issue |
 | T12 | Coverage by membership | Rows below the watermark but absent from assessed inputs are not eligible. Changing the rule-set, metric-definition, mapping, threshold or feature-spec version each removes eligibility. An `unassessed` result grants nothing. |
 | T13 | Issue lifecycle | A failed run leaves issues `open` or `unassessed`; a successful reassessment resolves them; purge gives `closed_by_purge`; waiving a Hard control is rejected |
 | T14 | Purge and file cleanup | Batched purge redacts readings, evidence and manifests; a failed batch rolls back while earlier batches stay done; dependent audits become `replay_unavailable`. A crash between the database purge and file cleanup leaves queue rows that a retry completes; status stays pending until both finish. |
 | T15 | Report redaction | Without `internal_audit` the report has IDs and redacted evidence only; permission is rechecked at generation |
 | T16 | Catchment | Jersey City and Hoboken venues are inside; Newark is outside; a venue without a reviewed geography is excluded |
+| T17 | Forged verified result | Calling `audience_record_verified_audit` as the writer or the auditor is denied. As the verifier, each of these is rejected: a mismatched manifest hash, an omitted or extra assessed input, a missing rule result, a Hard control result that differs from the SQL recomputation, and a stale rule-set version. A worker whose rule-engine hash differs from `audit_rule_implementations` refuses to run. |
 
 ## 13. Definition of done
 
@@ -395,8 +453,12 @@ timeouts.
 
 ## 14. Open decisions for the owner
 
-- Audience provider selection after the sample test (Soundcharts, Chartmetric, Viberate)
-  and its written terms, including `internal_audit`, feature, training and testing rights.
-- Retention durations per permission.
-- Backtested values for `audience-thresholds` (50% jump, 25% correction, absolute floors).
-- Expected cadence per metric definition once a provider is chosen.
+Implementation in this increment is synthetic-only, so none of these block it. Each one
+blocks a later step, as shown.
+
+| Decision | Blocks | Enforced by |
+| --- | --- | --- |
+| Audience provider, chosen after the sample test (Soundcharts, Chartmetric, Viberate), and its written terms, including the `internal_audit`, feature, training and testing rights | Any live collection | No approved `source_permissions` row exists for any audience provider, so ingest is denied (5) |
+| Retention duration for each permission | Any live collection | Ingest for a non-synthetic source is rejected with `retention_undefined` until the permission records a duration |
+| Expected cadence for each metric definition | Any live collection | Ingest for a non-synthetic source is rejected with `cadence_undefined` while the metric definition has no `expected_cadence`; CFG-001 also flags it |
+| Backtested values for `audience-thresholds` (50% jump, 25% correction, absolute floors) | Any user-facing use of audit results or feature series | Threshold sets carry `status` (`provisional`, `validated`). v0.1 is `provisional`, and user-facing projections require `validated`, so none exist in this increment |
