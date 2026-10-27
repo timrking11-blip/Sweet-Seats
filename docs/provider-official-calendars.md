@@ -28,6 +28,13 @@ Ticketmaster Discovery?
 - `fetch_feed` checks the `collect` permission, then `SWEET_SEATS_OFFICIAL_FEEDS_ENABLED`,
   before any request; https only, a 2 MB cap, and conditional GET (`If-None-Match`,
   `If-Modified-Since`) so an unchanged calendar returns `not_modified`.
+- Requests reach only the host of the registry entry's owner-approved `official_url`,
+  on port 443. The host must resolve only to public addresses: private, loopback,
+  link-local (including cloud metadata), multicast, reserved, unspecified, shared and
+  documentation ranges, and IPv6 forms that embed an IPv4 address, are refused. The
+  connection is pinned to the checked address, and TLS still verifies the host's
+  certificate. Redirects are followed by hand, at most 3, each to the same approved
+  host and each re-checked; anything else ends the fetch with a fixed error code.
 
 ## Provider ingestion and the lead-time comparison
 

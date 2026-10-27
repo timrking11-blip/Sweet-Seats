@@ -7,6 +7,11 @@ discovery.ingest_collection accepts. Live HTTP stays off unless
 SWEET_SEATS_OFFICIAL_FEEDS_ENABLED=true, and fetch_feed checks the source permission
 before any request. Raw payloads are never retained.
 
+Requests go only to the host of the source's owner-approved official_url, over https
+on port 443, and only to an address that resolves as public. The connection is pinned
+to the address that was checked, so DNS cannot swap in another one. Redirects are
+followed by hand: at most MAX_REDIRECTS, each to the same approved host, each re-checked.
+
 Identity is never decided by name. A venue feed's venue and an artist feed's artist
 come from the feed configuration. Other names in the calendar (support acts, the
 LOCATION of an artist's show) become feed-scoped vendor keys such as
@@ -15,12 +20,15 @@ unmapped key goes to the review queue.
 """
 from __future__ import annotations
 
+import http.client
+import ipaddress
 import os
 import re
-import urllib.error
-import urllib.request
+import socket
+import ssl
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime
+from urllib.parse import urljoin, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .discovery import DiscoveryError, permitted, provider_url
@@ -28,13 +36,20 @@ from .discovery import DiscoveryError, permitted, provider_url
 ADAPTER_VERSION = "official-ics-0.1"
 ENABLE_FLAG = "SWEET_SEATS_OFFICIAL_FEEDS_ENABLED"
 MAX_BODY_BYTES = 2_000_000
+MAX_REDIRECTS = 3
+REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 FEED_TIMEZONE = "America/New_York"
 STATUS = {"CONFIRMED": "scheduled", "CANCELLED": "cancelled", "TENTATIVE": "unknown"}
 # Separators for co-billed acts in a venue calendar SUMMARY, in priority order.
 BILLING_SEPARATORS = re.compile(r"\s+(?:\+|w/|with|&)\s+", re.IGNORECASE)
 
-# (status, headers, body) for a GET of the given URL with request headers and timeout.
-Transport = Callable[[str, Mapping[str, str], float], tuple[int, Mapping[str, str], bytes]]
+# (status, headers, body) for one GET of url, connecting only to the given, already
+# checked IP address, with request headers and a timeout. Never follows redirects.
+Transport = Callable[[str, str, Mapping[str, str], float], tuple[int, Mapping[str, str], bytes]]
+# The IP addresses a host name resolves to, for (host, port).
+Resolver = Callable[[str, int], list[str]]
+# IPv6 prefixes that carry an IPv4 address (NAT64; RFC 6052 and RFC 8215).
+NAT64 = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("64:ff9b:1::/48"))
 
 
 class FeedError(DiscoveryError):
@@ -184,24 +199,101 @@ def map_feed(text: str, feed: Mapping, observed_at: datetime) -> dict:
     return {"records": records, "display": display, "skipped": skipped}
 
 
-def _urllib_transport(url: str, headers: Mapping[str, str], timeout: float):
-    request = urllib.request.Request(url, headers={"User-Agent": "sweet-seats-monitor/0.1",
-                                                   "Accept": "text/calendar", **headers})
+def public_address(value: str) -> bool:
+    """True only for a globally routable unicast IP address.
+
+    Rejects private, loopback, link-local, multicast, reserved, unspecified, shared
+    (100.64.0.0/10), documentation and site-local addresses, scoped IPv6 addresses, and
+    every IPv6 form that embeds an IPv4 address (IPv4-mapped, 6to4, Teredo, NAT64).
+    """
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.status, dict(response.headers.items()), response.read(MAX_BODY_BYTES + 1)
-    except urllib.error.HTTPError as exc:
-        result = exc.code, dict(exc.headers.items()) if exc.headers else {}, b""
-        exc.close()
-        return result
-    except (urllib.error.URLError, TimeoutError, OSError):
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and (
+            address.scope_id or address.ipv4_mapped or address.sixtofour or address.teredo
+            or any(address in prefix for prefix in NAT64) or address.is_site_local):
+        return False
+    return (address.is_global and not address.is_multicast and not address.is_private
+            and not address.is_loopback and not address.is_link_local
+            and not address.is_reserved and not address.is_unspecified)
+
+
+def approved_host(source: Mapping) -> str:
+    """The one host requests may reach: that of the registry entry's official_url."""
+    try:
+        return urlsplit(provider_url(source.get("official_url"))).hostname
+    except DiscoveryError:
+        raise FeedError("host_not_approved") from None
+
+
+def _check_url(url: str, host: str) -> None:
+    """https, no credentials, exactly the approved host, and the default port."""
+    try:
+        parts = urlsplit(provider_url(url))
+        port = parts.port
+    except (DiscoveryError, ValueError):
+        raise FeedError("invalid_provider_url") from None
+    if parts.hostname != host:
+        raise FeedError("host_not_approved")
+    if port not in (None, 443):
+        raise FeedError("port_not_allowed")
+
+
+def _resolve(host: str, port: int) -> list[str]:
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError):
+        raise FeedError("dns_error") from None
+    return [info[4][0] for info in infos]
+
+
+def _public_address_for(host: str, resolver: Resolver) -> str:
+    """One address to connect to. Every address the host resolves to must be public."""
+    addresses = resolver(host, 443)
+    if not addresses:
+        raise FeedError("dns_error")
+    if not all(public_address(a) for a in addresses):
+        raise FeedError("non_public_address")
+    return addresses[0]
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Connects to one checked address; TLS still verifies the certificate for host."""
+
+    def __init__(self, host: str, address: str, timeout: float):
+        self._tls = ssl.create_default_context()
+        super().__init__(host, 443, timeout=timeout, context=self._tls)
+        self._address = address
+
+    def connect(self):
+        sock = socket.create_connection((self._address, self.port), self.timeout)
+        self.sock = self._tls.wrap_socket(sock, server_hostname=self.host)
+
+
+def _pinned_transport(url: str, address: str, headers: Mapping[str, str], timeout: float):
+    parts = urlsplit(url)
+    target = (parts.path or "/") + ("?" + parts.query if parts.query else "")
+    conn = _PinnedHTTPSConnection(parts.hostname, address, timeout)
+    try:
+        conn.request("GET", target, headers={"User-Agent": "sweet-seats-monitor/0.1",
+                                             "Accept": "text/calendar", **headers})
+        response = conn.getresponse()
+        body = response.read(MAX_BODY_BYTES + 1) if response.status == 200 else b""
+        return response.status, dict(response.getheaders()), body
+    except (OSError, http.client.HTTPException):
         raise FeedError("network_error") from None
+    finally:
+        conn.close()
 
 
 def fetch_feed(source: dict, feed: Mapping, now: datetime, *, validators: Mapping | None = None,
-               transport: Transport | None = None, env: Mapping[str, str] | None = None,
-               timeout: float = 10.0) -> dict:
+               transport: Transport | None = None, resolver: Resolver | None = None,
+               env: Mapping[str, str] | None = None, timeout: float = 10.0) -> dict:
     """Permission, then the enable flag; both pass before any request is made.
+
+    The feed URL must be on the source's approved host. Every request, the first and
+    each redirect, is re-checked: same host, port 443, public addresses only.
 
     Sends If-None-Match / If-Modified-Since from the previous fetch, so an unchanged
     calendar costs one small request and returns "not_modified" (not "empty").
@@ -214,18 +306,37 @@ def fetch_feed(source: dict, feed: Mapping, now: datetime, *, validators: Mappin
     if not enabled(env):
         return {**result, "status": "skipped", "error_code": "provider_disabled"}
     url = provider_url(feed["url"])
+    try:
+        host = approved_host(source)
+        _check_url(url, host)
+    except FeedError as exc:
+        return {**result, "status": "skipped", "error_code": str(exc)}
     headers = {}
     if validators and validators.get("etag"):
         headers["If-None-Match"] = validators["etag"]
     if validators and validators.get("last_modified"):
         headers["If-Modified-Since"] = validators["last_modified"]
+    calls = 0
     try:
-        status, raw_headers, body = (transport or _urllib_transport)(url, headers, timeout)
+        for hop in range(MAX_REDIRECTS + 1):
+            if hop:
+                _check_url(url, host)
+            address = _public_address_for(host, resolver or _resolve)
+            calls += 1
+            status, raw_headers, body = (transport or _pinned_transport)(
+                url, address, headers, timeout)
+            lower = {str(k).lower(): str(v) for k, v in raw_headers.items()}
+            if status not in REDIRECT_STATUSES:
+                break
+            if not lower.get("location"):
+                raise FeedError("redirect_without_location")
+            url = urljoin(url, lower["location"])
+        else:
+            raise FeedError("too_many_redirects")
     except FeedError as exc:
-        return {**result, "status": "failed", "error_code": str(exc), "network_calls": 1}
-    lower = {str(k).lower(): str(v) for k, v in raw_headers.items()}
+        return {**result, "status": "failed", "error_code": str(exc), "network_calls": calls}
     seen = {"etag": lower.get("etag"), "last_modified": lower.get("last-modified")}
-    base = {**result, "network_calls": 1,
+    base = {**result, "network_calls": calls,
             "validators": {k: v for k, v in seen.items() if v} or result["validators"]}
     if status == 304:
         return {**base, "status": "not_modified", "error_code": None}
