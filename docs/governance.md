@@ -27,5 +27,8 @@ Sweet Seats follows the approved authority map.
 | Product quality | User path, accessibility and honest labels | UI test or screenshot review, copy audit |
 | Release | Final independent reconciliation | Passing checks, commit SHA, unresolved-risk list |
 
+The proposed Claude Code agents for these roles, and the builder agents, are listed in
+[agents.md](agents.md).
+
 The build owner prepares the release evidence and makes the final merge recommendation. Production deployment, paid provider activation and public launch remain explicit owner approvals.
 
