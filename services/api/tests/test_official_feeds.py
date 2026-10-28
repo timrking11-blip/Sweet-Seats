@@ -141,9 +141,10 @@ def test_fetch_feed_rejects_oversized_and_non_https():
     big = fetch_feed(hall, FEED, NOW, env=ENABLED, resolver=public_dns,
                      transport=lambda *a: (200, {}, b"x" * 2_000_001))
     assert big["error_code"] == "response_too_large"
-    with pytest.raises(DiscoveryError, match="invalid_provider_url"):
-        fetch_feed(hall, {**FEED, "url": "http://hall.example.invalid/c.ics"}, NOW, env=ENABLED,
-                   resolver=public_dns, transport=lambda *a: (200, {}, b""))
+    plain = fetch_feed(hall, {**FEED, "url": "http://hall.example.invalid/c.ics"}, NOW,
+                       env=ENABLED, resolver=public_dns, transport=lambda *a: (200, {}, b""))
+    assert (plain["status"], plain["error_code"], plain["network_calls"]) == (
+        "skipped", "invalid_provider_url", 0)
 
 
 class Recorder:
@@ -172,7 +173,7 @@ def redirect(location, status=302):
     "100.64.0.1", "192.0.2.10", "fc00::1", "fec0::1",  # shared, documentation, ULA, site-local
     "::ffff:127.0.0.1", "::ffff:93.184.215.14",  # IPv4-mapped, even of a public address
     "2002:a00:1::1", "2001::a00:1", "64:ff9b::a00:1",  # 6to4, Teredo, NAT64
-    "fe80::1%1", "not-an-address",
+    "fe80::1%1", "::10.0.0.5", "::8.8.8.8", "not-an-address",  # scoped, IPv4-compatible
 ])
 def test_public_address_rejects_every_non_public_form(address):
     assert not public_address(address)

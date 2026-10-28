@@ -27,7 +27,7 @@ pytestmark = pytest.mark.skipif(not os.environ.get("SWEET_SEATS_TEST_DATABASE_UR
 
 
 class FailingTransport(Transport):
-    def send(self, channel, endpoint_ref, message):
+    def send(self, channel, endpoint_ref, message, idempotency_key):
         raise TransportError("provider_unavailable")
 
 
@@ -38,10 +38,10 @@ class ChannelTransport(LogTransport):
         super().__init__()
         self.failing = set(failing)
 
-    def send(self, channel, endpoint_ref, message):
+    def send(self, channel, endpoint_ref, message, idempotency_key):
         if channel in self.failing:
             raise TransportError("provider_unavailable")
-        return super().send(channel, endpoint_ref, message)
+        return super().send(channel, endpoint_ref, message, idempotency_key)
 
 
 def connect(store):
@@ -173,7 +173,7 @@ def test_partial_delivery_retries_only_the_failed_subscription(pg_store):
     with conn:
         flaky = ChannelTransport({"web_push"})
         assert dispatch_due(conn, flaky, feed, NOW, "w1") == {
-            "sent": 0, "suppressed": 0, "retry": 1, "failed": 0}
+            "sent": 0, "suppressed": 0, "retry": 1, "failed": 0, "uncertain": 0, "lease_lost": 0}
         (alert,) = alerts(conn)
         # Email was delivered but push is still owed, so the alert is not sent yet.
         assert (alert["status"], alert["sent_at"]) == ("pending", None)
@@ -191,7 +191,7 @@ def test_partial_delivery_retries_only_the_failed_subscription(pg_store):
         # A finished alert is never claimed again.
         later = alert["next_attempt_at"] + timedelta(hours=1)
         assert dispatch_due(conn, healthy, feed, later, "w1") == {
-            "sent": 0, "suppressed": 0, "retry": 0, "failed": 0}
+            "sent": 0, "suppressed": 0, "retry": 0, "failed": 0, "uncertain": 0, "lease_lost": 0}
         assert sent_channels(flaky) + sent_channels(healthy) == ["email", "web_push"]
         rows = conn.execute(
             """SELECT s.channel, a.attempt_no, a.status FROM delivery_attempts a
@@ -243,7 +243,11 @@ def test_crashed_send_is_reclaimed_after_its_lease(pg_store):
         assert len(claim_due(conn, NOW, "crashed-worker")) == 1  # ...then the worker dies.
         assert dispatch_due(conn, transport, feed, NOW + timedelta(seconds=1), "w2")["sent"] == 0
         later = NOW + LEASE + timedelta(seconds=1)
-        assert dispatch_due(conn, transport, feed, later, "w2")["sent"] == 1
+        # The expired lease backs off like any retry before the alert is claimed again.
+        assert dispatch_due(conn, transport, feed, later, "w2")["sent"] == 0
+        (alert,) = alerts(conn)
+        assert (alert["status"], alert["last_error_code"]) == ("pending", "lease_expired")
+        assert dispatch_due(conn, transport, feed, alert["next_attempt_at"], "w2")["sent"] == 1
         (alert,) = alerts(conn)
         assert alert["attempts"] == 2  # The lost attempt counts; delivery is at-least-once.
 
