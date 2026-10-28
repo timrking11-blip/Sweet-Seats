@@ -167,6 +167,17 @@ def _price_ranges(value: object) -> list[dict]:
     return ranges
 
 
+def _public_onsale(sales: object) -> str | None:
+    """Public on-sale start as a UTC instant; TBD or malformed values are unknown, not guessed."""
+    public = sales.get("public") if isinstance(sales, Mapping) else None
+    if not isinstance(public, Mapping) or public.get("startTBD") is True:
+        return None
+    try:
+        return _zulu(timestamp(public["startDateTime"]))
+    except (KeyError, DiscoveryError):
+        return None
+
+
 def map_event(event: Mapping, observed_at: datetime) -> dict:
     """Return {"record": source event record, "display": display-only metadata}.
 
@@ -211,6 +222,9 @@ def map_event(event: Mapping, observed_at: datetime) -> dict:
               "status": STATUS.get((code or "").lower(), "unknown"),
               "observed_at": observed, "available_at": observed,
               "source_url": url, "ticket_url": url}
+    onsale_at = _public_onsale(event.get("sales"))
+    if onsale_at:
+        record["onsale_at"] = onsale_at
     display = {"status_code": code, **schedule, "start_time_known": starts_at is not None,
                "venue": venue, "attractions": credits,
                "price_ranges": _price_ranges(event.get("priceRanges")),

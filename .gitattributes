@@ -1,2 +1,4 @@
 # Shell scripts run on Linux CI; keep LF regardless of local autocrlf.
 *.sh text eol=lf
+# iCalendar fixtures use CRLF line endings per RFC 5545; keep their bytes as-is.
+*.ics -text

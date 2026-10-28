@@ -127,6 +127,9 @@ export SWEET_SEATS_LOCAL_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5
 python -m pip install --require-hashes -r services/api/requirements-dev.lock
 python -m pip install --no-deps -e ./services/api
 # Run once in this NEW database, in filename order. Never target a shared/hosted DB.
+# The two emulation scripts stand in for Supabase's API roles and Auth (auth.uid()).
+psql "$SWEET_SEATS_LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/ci/emulate_supabase_roles.sql
+psql "$SWEET_SEATS_LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/ci/emulate_supabase_auth.sql
 for f in supabase/migrations/*.sql; do
   psql "$SWEET_SEATS_LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f" || break
 done

@@ -104,7 +104,8 @@ def test_multi_act_event_maps_to_source_event_record() -> None:
     mapped = map_event(load("event.json"), NOW)
     record, display = mapped["record"], mapped["display"]
 
-    assert set(record) == RECORD_FIELDS
+    assert set(record) == RECORD_FIELDS | {"onsale_at"}
+    assert record["onsale_at"] == "2026-09-01T14:00:00Z"
     assert record["performers"] == [
         {"vendor_artist_id": "SYNTH-AT-0001", "role": "headliner", "billing_order": 0},
         {"vendor_artist_id": "SYNTH-AT-0002", "role": "support", "billing_order": 1},

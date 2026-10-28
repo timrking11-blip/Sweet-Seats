@@ -171,6 +171,8 @@ class PostgresStore:
                 performers=credits[rid],
                 collection_run_key=run_keys[row["collection_run_id"]],
             )
+            if row["onsale_at"] is not None:
+                record["onsale_at"] = row["onsale_at"]
             state["records"][rid] = record
         # Review items keep the declared observation exactly as ingest retained it.
         state["unresolved"] = {
@@ -329,12 +331,13 @@ class PostgresStore:
                 "payload_hash",
             )
             conn.execute(
-                f"""INSERT INTO source_event_records({",".join(fields)},vendor_venue_id,collection_run_id)
-                         VALUES ({",".join(["%s"] * (len(fields) + 2))})""",
+                f"""INSERT INTO source_event_records({",".join(fields)},vendor_venue_id,collection_run_id,
+                         onsale_at) VALUES ({",".join(["%s"] * (len(fields) + 3))})""",
                 (
                     *(r[k] for k in fields),
                     r["venue_vendor_id"],
                     uuid5(NAMESPACE, r["collection_run_key"]),
+                    r.get("onsale_at"),
                 ),
             )
             for p in r["performers"]:

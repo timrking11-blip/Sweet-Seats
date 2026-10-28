@@ -12,6 +12,7 @@
 set -uo pipefail
 
 ROLES=supabase/ci/emulate_supabase_roles.sql
+AUTH=supabase/ci/emulate_supabase_auth.sql
 PERMISSIONS_TEST=supabase/tests/source_permissions_test.sql
 RLS_TEST=supabase/tests/rls_denial_test.sql
 MB_RUNS_TEST=supabase/tests/musicbrainz_collection_runs_test.sql
@@ -34,6 +35,7 @@ run_control() {
 
   {
     if [ "$roles" = yes ]; then cat "$ROLES"; echo; fi
+    cat "$AUTH"; echo
     for f in "${MIGRATIONS[@]}"; do
       if [ -n "$migration_sed" ]; then sed "$migration_sed" "$f"; else cat "$f"; fi
       echo
@@ -118,6 +120,46 @@ run_control "revocation treated as immediate" \
 run_control "expiry boundary made inclusive" \
   "FAIL expiry exactly at as_of is denied" "$PERMISSIONS_TEST" \
   "" yes "s/permission.expires_at > as_of/permission.expires_at >= as_of/"
+
+# Source-permission evidence.
+run_control "approval evidence no longer required" \
+  "FAIL empty evidence is denied" "$PERMISSIONS_TEST" \
+  "" yes "/btrim(permission.evidence_note) <> ''/d"
+
+# Phase 2 user isolation and the first-party record rule.
+USER_TEST=supabase/tests/user_isolation_test.sql
+
+run_control "follows readable by every signed-in user" \
+  "FAIL user A reads 2 artist_follows rows" "$USER_TEST" \
+  "create policy leak on public.artist_follows for select to authenticated using (true);"
+
+run_control "insert check no longer tied to the signed-in user" \
+  "FAIL user A inserted a follow for user B" "$USER_TEST" \
+  "" yes "s/  with check (user_id = (select auth.uid()));/  with check (true);/"
+
+run_control "provider value column added to a user table" \
+  "FAIL user tables have unreviewed columns: artist_follows.last_seen_price_minor" "$USER_TEST" \
+  "alter table public.artist_follows add column last_seen_price_minor integer;"
+
+run_control "outcomes recordable without outcome consent" \
+  "FAIL user A recorded an outcome without outcome consent" "$USER_TEST" \
+  "" yes "/and profile.outcome_consent_at is not null/d"
+
+run_control "alerts readable by every signed-in user" \
+  "FAIL user A reads 2 alerts rows" "$USER_TEST" \
+  "create policy leak on public.alerts for select to authenticated using (true);"
+
+run_control "provider title column added to the alert outbox" \
+  "FAIL user tables have unreviewed columns: alerts.event_title" "$USER_TEST" \
+  "alter table public.alerts add column event_title text;"
+
+run_control "RLS disabled on per-subscription delivery state" \
+  "public tables without row level security: alert_deliveries" "$RLS_TEST" \
+  "alter table public.alert_deliveries disable row level security;"
+
+run_control "provider value column added to delivery state" \
+  "FAIL user tables have unreviewed columns: alert_deliveries.endpoint_address" "$USER_TEST" \
+  "alter table public.alert_deliveries add column endpoint_address text;"
 
 # MusicBrainz collection runs.
 run_control "begin_musicbrainz_run executable by anon" \

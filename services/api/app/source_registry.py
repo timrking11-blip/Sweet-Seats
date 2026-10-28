@@ -1,4 +1,4 @@
-"""Planned provider sources (SS-ADR-003 deny-by-default source permissions).
+"""Planned provider sources (SS-ADR-004 deny-by-default source permissions).
 
 A registry entry records intent and known terms constraints. It is not activation:
 every permission use stays false until the owner records a separate approval with
@@ -54,3 +54,37 @@ _SOURCES: dict[str, dict] = {
 def planned_source(slug: str) -> dict:
     """Return a copy so callers cannot widen the registered grant in place."""
     return copy.deepcopy(_SOURCES[slug])
+
+
+def planned_official_calendar(slug: str, name: str, url: str) -> dict:
+    """Registry entry for one official artist or venue calendar (Phase 3 monitors).
+
+    Planned, with every use false. The owner approves each feed separately after
+    checking that site's terms and robots policy; a public calendar URL grants nothing.
+    """
+    return {
+        "source_id": str(uuid5(NAMESPACE, "source:" + slug)),
+        "slug": slug,
+        "name": name,
+        "kind": "provider",
+        "source_type": "official_calendar",
+        "official_url": url,
+        "terms_url": None,
+        "access_status": "planned",
+        "adapter_version": "official-ics-0.1",
+        "rate_limit_note": "Conditional GET (ETag / Last-Modified); poll no faster than hourly.",
+        "candidate_uses": ["collect", "display", "derived_retention"],
+        "constraints": ["Check the site's terms and robots policy before activation.",
+                        "Keep the claimed publication time as metadata; lead time uses available_at."],
+        "artist_mappings": {},
+        "venue_mappings": {},
+        "permission": {
+            "permission_id": str(uuid5(NAMESPACE, "permission:" + slug)),
+            "terms_version": None,
+            "evidence_ref": None,
+            "approved_at": None,
+            "expires_at": None,
+            "revoked_at": None,
+            "uses": dict.fromkeys(sorted(USES), False),
+        },
+    }

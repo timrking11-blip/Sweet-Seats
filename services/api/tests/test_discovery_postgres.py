@@ -24,6 +24,59 @@ DSN = os.environ.get("SWEET_SEATS_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not DSN, reason="requires disposable local PostgreSQL DSN")
 
 
+def test_unresolved_observations_persist(pg_store, tmp_path):
+    store, fixture = pg_store
+    fixture["batches"][0]["records"][0]["performers"][0]["vendor_artist_id"] = "unknown"
+    baseline = FixtureStore(tmp_path / "events.json")
+    expected = baseline.seed(fixture, NOW)
+
+    # Whole-state equality is too strict: PostgreSQL normalizes permission timestamps
+    # and expands the uses map. Unresolved observations and the feed must match.
+    assert store.seed(fixture, NOW)["unresolved"] == expected["unresolved"]
+    assert store.read()["unresolved"] == expected["unresolved"]
+    assert store.feed(NOW) == baseline.feed(NOW)
+
+
+def test_review_queue_rows_survive_the_upgrade_migrations(pg_upgrade):
+    # source_unresolved_records is the only home of review items. Rows written at the
+    # upgrade base schema survive every later migration and still load; no second copy
+    # (such as a JSON column on discovery_state) exists to drift from them.
+    store, fixture, upgrade = pg_upgrade
+    for batch in fixture["batches"]:
+        for record in batch["records"]:
+            for performer in record["performers"]:
+                performer["vendor_artist_id"] = "unknown"
+    written = store.seed(fixture, NOW)["unresolved"]
+    query = "SELECT * FROM source_unresolved_records ORDER BY source_record_id"
+    with store._connect() as conn:
+        rows = conn.execute(query).fetchall()
+    assert len(rows) == len(written) == sum(len(b["records"]) for b in fixture["batches"])
+
+    upgrade()
+    with store._connect() as conn:
+        assert conn.execute(query).fetchall() == rows
+        columns = conn.execute(
+            """SELECT column_name FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'discovery_state'"""
+        ).fetchall()
+    assert "unresolved_observations" not in {c["column_name"] for c in columns}
+    assert store.read()["unresolved"] == written
+    assert store.feed(NOW)["review_count"] == len(written)
+
+
+def test_rescheduled_status_persists_like_the_json_store(pg_store, tmp_path):
+    # Regression: the enum lacked 'rescheduled', so this seed rolled back entirely.
+    store, fixture = pg_store
+    # Record 1 is the only observation of its event, so no conflict hides it.
+    fixture["batches"][0]["records"][1]["status"] = "rescheduled"
+    baseline = FixtureStore(tmp_path / "events.json")
+    baseline.seed(copy.deepcopy(fixture), NOW)
+
+    store.seed(fixture, NOW)
+    assert "rescheduled" in {e["status"] for e in store.feed(NOW)["events"]}
+    assert store.feed(NOW) == baseline.feed(NOW)
+
+
 def test_persistence_parity_replay_restart_and_digest_report(pg_store, tmp_path):
     store, fixture = pg_store
     baseline = FixtureStore(tmp_path / "events.json")
@@ -110,7 +163,7 @@ def test_unknown_venue_review_item_persists_and_resolves_like_fixture_store(pg_s
     feed = store.feed(NOW)
     assert feed == baseline.feed(NOW)
     assert feed["review_count"] == 1 and len(feed["events"]) == 2
-    assert feed["unresolved"][0]["reason"] == "unresolved_typed_identity"
+    assert feed["unresolved"][0]["reason"] == "unresolved_venue_identity"
     # A newly reviewed crosswalk resolves the replayed observation in both stores.
     source = next(s for s in fixture["sources"] if s["source_id"] == fixture["batches"][-1]["source_id"])
     source["venue_mappings"]["missing"] = source["venue_mappings"][vendor_venue]
@@ -130,7 +183,6 @@ def test_unknown_venue_review_item_persists_and_resolves_like_fixture_store(pg_s
     "field,value",
     [
         ("display_allowed", False),
-        ("raw_retention_allowed", False),
         ("derived_retention_allowed", False),
         ("revoked_at", "2026-10-18T06:00:00Z"),
         ("expires_at", "2026-10-18T07:00:00Z"),
@@ -148,7 +200,20 @@ def test_database_permission_changes_hide_events_immediately(pg_store, field, va
     assert store.feed(NOW)["events"] == []
 
 
-@pytest.mark.parametrize("use", ["collect", "raw_retention", "derived_retention"])
+def test_raw_retention_is_not_required_to_store_or_display(pg_store):
+    # Only normalized records and a payload hash are stored, so raw_retention false
+    # (the Ticketmaster expectation) must not hide events. Derived retention does.
+    store, fixture = pg_store
+    for source in fixture["sources"]:
+        source["permission"]["uses"]["raw_retention"] = False
+    store.seed(fixture, NOW)
+    assert len(store.feed(NOW)["events"]) == 3
+    with store._connect() as conn:
+        conn.execute("UPDATE source_permissions SET derived_retention_allowed=false")
+    assert store.feed(NOW)["events"] == []
+
+
+@pytest.mark.parametrize("use", ["collect", "derived_retention"])
 def test_unknown_ingestion_rights_store_no_observations(pg_store, use):
     store, fixture = pg_store
     for source in fixture["sources"]:

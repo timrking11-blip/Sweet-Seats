@@ -48,8 +48,10 @@ Migrations were tested only on disposable local PostgreSQL; no remote schema was
   are retained in `unresolved` with a fixed reason, source identity, permission and run
   lineage. They create no canonical event or artist. Invalid observations still reject
   the transaction. There is no name matching. Existing crosswalk reassignment requires review.
-- Check collection plus raw and derived retention before reading a batch into the store.
-  Display permission is independent and checked again on every product read. Unknown,
+- Check collection plus derived retention before reading a batch into the store. The store
+  keeps normalized observations and a payload hash, never the raw provider payload, so
+  raw retention is not required; it stays reserved for any future path that keeps payloads.
+  Display permission plus derived retention is checked again on every product read. Unknown,
   false, future approval, expiry and revocation all deny the relevant use.
 - Matching requires reviewed canonical venue/artist mappings, exact known start time,
   and the same headliner set. Different known start times remain separate. Date-only
@@ -91,6 +93,14 @@ Freshness is computed from observation time, not fetch/render time. The syntheti
 mark it sold out, or erase prior facts. A successful empty collection is distinct from
 a failure. Missing/corrupt stores return 503; absent/withheld event details return 404.
 
+Discovery list/detail responses and their handled errors explicitly send
+`Cache-Control: private, no-store, max-age=0`, `CDN-Cache-Control: no-store`,
+`Pragma: no-cache` and `Expires: 0`. They issue no ETag/Last-Modified validators;
+conditional requests still run a current permission-filtered projection. This is
+HTTP cache prevention, not deletion of retained observations or removal of already
+rendered browser state. Client revalidation, external cache configuration and
+retention/deletion remain separate release checks.
+
 Ticket URLs are null in this demo. Reserved source URLs are shown as provenance text,
 not represented as real announcements. There are no live ticket links, follows, saved
 events, authentication, user data, notification timers, prediction or purchase flows.
@@ -115,6 +125,8 @@ python -m venv .venv
 .venv/bin/python -m pip install -e './services/api[dev]'
 python -m services.api.app.discovery --fixture tests/fixtures/discovery/edge-cases.json
 # Re-run unchanged: 3 events, 5 observations, 1 unresolved identity; zero provider calls.
+# "lead_times" reports, per source, how often it made an event knowable first
+# (by available_at) and its median lag on events other sources also observed.
 .venv/bin/python -m uvicorn app.main:app --app-dir services/api --host 127.0.0.1 --port 8000
 ```
 

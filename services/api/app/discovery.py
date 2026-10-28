@@ -22,6 +22,14 @@ DEFAULT_STORE = ROOT / ".local" / "discovery.json"
 DEFAULT_FIXTURE = ROOT / "tests" / "fixtures" / "discovery" / "nyc.json"
 NAMESPACE = UUID("8b4205ed-5ed2-4956-980a-85191120abe1")
 USES = {"collect", "display", "raw_retention", "derived_retention", "feature", "train", "test"}
+# Stored observations are normalized records plus a payload hash; no raw provider
+# payload is kept, so storage and display gate on derived retention. raw_retention
+# stays a separate use for any future path that keeps the payload itself.
+STORE_USES = ("collect", "derived_retention")
+DISPLAY_USES = ("display", "derived_retention")
+# A valid observation whose venue or artist has no reviewed crosswalk is kept for
+# review, never rejected and never matched by name (contract: retained in unresolved).
+UNRESOLVED_IDENTITY = {"unresolved_venue_identity", "unresolved_typed_identity"}
 
 
 class DiscoveryError(ValueError):
@@ -50,16 +58,24 @@ def identifier(value: str) -> str:
 
 
 def permitted(source: dict, use: str, now: datetime) -> bool:
-    """Distinct uses; unknown, expired, future or revoked grants fail closed."""
+    """Distinct uses; unknown, expired, future or revoked grants fail closed.
+
+    Mirrors public.source_use_is_permitted; tests/test_permission_parity.py holds the
+    two to the same cases. A grant applies within [approved_at, revoked_at/expires_at).
+    """
     p = source.get("permission", {})
+
+    def present(value: object) -> bool:
+        return isinstance(value, str) and bool(value.strip())
+
     try:
         return bool(
             use in USES
-            and source.get("access_status") == "approved"
+            and source.get("access_status") in {"approved", "active"}
             and p.get("uses", {}).get(use) is True
-            and p.get("evidence_ref")
-            and p.get("terms_version")
-            and not p.get("revoked_at")
+            and present(p.get("evidence_ref"))
+            and present(p.get("terms_version"))
+            and (not p.get("revoked_at") or now < timestamp(p["revoked_at"]))
             and timestamp(p["approved_at"]) <= now < timestamp(p["expires_at"])
         )
     except (KeyError, DiscoveryError):
@@ -83,12 +99,29 @@ def _demo_url(value: str) -> str:
     return value
 
 
-def normalize(record: dict, source: dict, identities: dict) -> dict:
-    fields = {"vendor_event_id", "title", "venue_vendor_id", "performers", "starts_at",
-              "local_date", "timezone", "status", "observed_at", "available_at",
-              "source_url", "ticket_url"}
-    if set(record) != fields:
+def provider_url(value: object) -> str:
+    """A real provider link: https, a host, no embedded credentials."""
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(value) if isinstance(value, str) and len(value) <= 2048 else None
+    if (parsed is None or parsed.scheme != "https" or not parsed.hostname
+            or parsed.username or parsed.password):
+        raise DiscoveryError("invalid_provider_url")
+    return value
+
+
+RECORD_FIELDS = {"vendor_event_id", "title", "venue_vendor_id", "performers", "starts_at",
+                 "local_date", "timezone", "status", "observed_at", "available_at",
+                 "source_url", "ticket_url"}
+# Optional: when public on-sale opens, as the source states it (SourceEventRecord).
+OPTIONAL_RECORD_FIELDS = {"onsale_at"}
+
+
+def normalize(record: dict, source: dict, identities: dict, url=_demo_url) -> dict:
+    if not RECORD_FIELDS <= set(record) <= RECORD_FIELDS | OPTIONAL_RECORD_FIELDS:
         raise DiscoveryError("unexpected_record_fields")
+    if record.get("onsale_at") is not None:
+        timestamp(record["onsale_at"])
     if record["timezone"] != "America/New_York":
         raise DiscoveryError("unsupported_fixture_timezone")
     try:
@@ -108,9 +141,9 @@ def normalize(record: dict, source: dict, identities: dict) -> dict:
     _text(record["vendor_event_id"])
     _text(record["title"])
     _text(record["venue_vendor_id"])
-    _demo_url(record["source_url"])
+    url(record["source_url"])
     if record["ticket_url"] is not None:
-        _demo_url(record["ticket_url"])
+        url(record["ticket_url"])
     if not isinstance(record["performers"], list) or not record["performers"]:
         raise DiscoveryError("invalid_venue_or_credits")
     credit_keys = set()
@@ -132,6 +165,9 @@ def normalize(record: dict, source: dict, identities: dict) -> dict:
     try:
         venue_id = source["venue_mappings"][record["venue_vendor_id"]]
         venue = identities["venues"][identifier(venue_id)]
+    except (KeyError, TypeError) as exc:
+        raise DiscoveryError("unresolved_venue_identity") from exc
+    try:
         performers = []
         for credit in record["performers"]:
             if set(credit) != {"vendor_artist_id", "role", "billing_order"}:
@@ -149,11 +185,13 @@ def normalize(record: dict, source: dict, identities: dict) -> dict:
         raise DiscoveryError("invalid_venue_or_credits")
     if len({(p["artist_id"], p["role"]) for p in performers}) != len(performers):
         raise DiscoveryError("duplicate_performer_credit")
+    # A null on-sale time is dropped so record IDs and store parity match records without one.
+    record = {k: v for k, v in record.items() if k != "onsale_at" or v is not None}
     return {
         **record, "vendor_event_id": _text(record["vendor_event_id"]),
         "title": _text(record["title"]), "venue_id": venue_id, "performers": performers,
-        "source_url": _demo_url(record["source_url"]),
-        "ticket_url": _demo_url(record["ticket_url"]) if record["ticket_url"] else None,
+        "source_url": url(record["source_url"]),
+        "ticket_url": url(record["ticket_url"]) if record["ticket_url"] else None,
         "source_id": identifier(source["source_id"]),
         "permission_id": identifier(source["permission"]["permission_id"]),
         "adapter_version": source["adapter_version"],
@@ -226,90 +264,129 @@ def ingest(state: dict, fixture: dict, now: datetime) -> dict:
                     raise DiscoveryError("identity_crosswalk_revision_requires_review")
     result["sources"].update(sources)
     for batch in fixture["batches"]:
-        if set(batch) != {"source_id", "logical_key", "outcome", "records"}:
-            raise DiscoveryError("unexpected_batch_fields")
-        source = sources[batch["source_id"]]
-        logical_key = _text(batch["logical_key"])
-        run_key = source["source_id"] + ":" + logical_key
-        allowed = all(permitted(source, use, now) for use in
-                      ("collect", "raw_retention", "derived_retention"))
-        # A skipped run retains only its operational identity, not a payload-derived hash.
-        fingerprint = digest(batch) if allowed else digest([source["source_id"], logical_key, "skipped"])
-        if run_key in result["runs"]:
-            if result["runs"][run_key]["digest"] != fingerprint:
-                raise DiscoveryError("changed_batch_at_same_logical_key")
+        _ingest_batch(result, sources, batch, now, _demo_url)
+    return result
+
+
+def _ingest_batch(result: dict, sources: dict, batch: dict, now: datetime, url) -> None:
+    """Reconcile one collection batch into result in place (shared by every source kind)."""
+    if set(batch) != {"source_id", "logical_key", "outcome", "records"}:
+        raise DiscoveryError("unexpected_batch_fields")
+    source = sources[batch["source_id"]]
+    logical_key = _text(batch["logical_key"])
+    run_key = source["source_id"] + ":" + logical_key
+    allowed = all(permitted(source, use, now) for use in STORE_USES)
+    # A skipped run retains only its operational identity, not a payload-derived hash.
+    fingerprint = digest(batch) if allowed else digest([source["source_id"], logical_key, "skipped"])
+    if run_key in result["runs"]:
+        if result["runs"][run_key]["digest"] != fingerprint:
+            raise DiscoveryError("changed_batch_at_same_logical_key")
+        return
+    outcome = batch["outcome"]
+    if outcome not in {"succeeded", "empty", "failed"}:
+        raise DiscoveryError("invalid_collection_outcome")
+    if (outcome == "succeeded") != bool(batch["records"]):
+        raise DiscoveryError("collection_outcome_record_mismatch")
+    run = {"source_id": source["source_id"], "logical_key": logical_key,
+           "status": outcome if allowed else "skipped", "digest": fingerprint,
+           "item_count": 0, "finished_at": now.isoformat(),
+           "error_code": "provider_failure" if outcome == "failed" else None}
+    result["runs"][run_key] = run
+    if not allowed or outcome != "succeeded":
+        return
+    for raw in batch["records"]:
+        unresolved_reason = None
+        try:
+            record = normalize(raw, source, result["identities"], url)
+        except DiscoveryError as exc:
+            if str(exc) not in UNRESOLVED_IDENTITY:
+                raise
+            unresolved_reason = str(exc)
+            # Known schema and valid facts, but no reviewed typed crosswalk.
+            # Retain only the declared observation, never an arbitrary payload.
+            record = {**raw, "source_id": source["source_id"],
+                      "permission_id": source["permission"]["permission_id"]}
+        if timestamp(record["available_at"]) > now:
+            raise DiscoveryError("future_observation")
+        p = source["permission"]
+        if not (timestamp(p["approved_at"]) <= timestamp(record["observed_at"])
+                < timestamp(p["expires_at"])):
+            raise DiscoveryError("observation_outside_permission")
+        unresolved_id = str(uuid5(NAMESPACE, digest([source["source_id"], raw])))
+        if "venue_id" not in record:
+            result["unresolved"][unresolved_id] = {
+                **record, "source_record_id": unresolved_id,
+                "reason": unresolved_reason, "collection_run_key": run_key,
+                "payload_hash": digest(raw), "adapter_version": source["adapter_version"],
+            }
+            run["item_count"] += 1
             continue
-        outcome = batch["outcome"]
-        if outcome not in {"succeeded", "empty", "failed"}:
-            raise DiscoveryError("invalid_collection_outcome")
-        if (outcome == "succeeded") != bool(batch["records"]):
-            raise DiscoveryError("collection_outcome_record_mismatch")
-        run = {"source_id": source["source_id"], "logical_key": logical_key,
-               "status": outcome if allowed else "skipped", "digest": fingerprint,
-               "item_count": 0, "finished_at": now.isoformat(),
-               "error_code": "provider_failure" if outcome == "failed" else None}
-        result["runs"][run_key] = run
-        if not allowed or outcome != "succeeded":
-            continue
-        for raw in batch["records"]:
-            try:
-                record = normalize(raw, source, result["identities"])
-            except DiscoveryError as exc:
-                if str(exc) != "unresolved_typed_identity":
-                    raise
-                # Known schema and valid facts, but no reviewed typed crosswalk.
-                # Retain only the declared observation, never an arbitrary payload.
-                record = {**raw, "source_id": source["source_id"],
-                          "permission_id": source["permission"]["permission_id"]}
-            if timestamp(record["available_at"]) > now:
-                raise DiscoveryError("future_observation")
-            p = source["permission"]
-            if not (timestamp(p["approved_at"]) <= timestamp(record["observed_at"])
-                    < timestamp(p["expires_at"])):
-                raise DiscoveryError("observation_outside_permission")
-            unresolved_id = str(uuid5(NAMESPACE, digest([source["source_id"], raw])))
-            if "venue_id" not in record:
+        # Replaying observations under a new reviewed crosswalk can resolve a prior item.
+        result["unresolved"].pop(unresolved_id, None)
+        mapping_key = source["source_id"] + ":event:" + record["vendor_event_id"]
+        headliners = sorted(p["artist_id"] for p in record["performers"]
+                            if p["role"] == "headliner")
+        match_key = digest([record["venue_id"], timestamp(record["starts_at"]).isoformat(),
+                            headliners]) if record["starts_at"] and headliners else None
+        event_id = result["mappings"].get(mapping_key, {}).get("event_id")
+        mapping_method = "source_identity" if event_id else None
+        if event_id is None:
+            matches = [e["event_id"] for e in result["events"].values()
+                       if match_key and e["match_key"] == match_key]
+            if len(matches) > 1:
                 result["unresolved"][unresolved_id] = {
                     **record, "source_record_id": unresolved_id,
-                    "reason": "unresolved_typed_identity", "collection_run_key": run_key,
-                    "payload_hash": digest(raw), "adapter_version": source["adapter_version"],
+                    "reason": "ambiguous_event_match", "collection_run_key": run_key,
+                    "payload_hash": digest(raw),
                 }
                 run["item_count"] += 1
                 continue
-            # Replaying observations under a new reviewed crosswalk can resolve a prior item.
-            result["unresolved"].pop(unresolved_id, None)
-            mapping_key = source["source_id"] + ":event:" + record["vendor_event_id"]
-            headliners = sorted(p["artist_id"] for p in record["performers"]
-                                if p["role"] == "headliner")
-            match_key = digest([record["venue_id"], timestamp(record["starts_at"]).isoformat(),
-                                headliners]) if record["starts_at"] and headliners else None
-            event_id = result["mappings"].get(mapping_key, {}).get("event_id")
-            mapping_method = "source_identity" if event_id else None
-            if event_id is None:
-                matches = [e["event_id"] for e in result["events"].values()
-                           if match_key and e["match_key"] == match_key]
-                if len(matches) > 1:
-                    result["unresolved"][unresolved_id] = {
-                        **record, "source_record_id": unresolved_id,
-                        "reason": "ambiguous_event_match", "collection_run_key": run_key,
-                        "payload_hash": digest(raw),
-                    }
-                    run["item_count"] += 1
-                    continue
-                event_id = matches[0] if matches else str(uuid5(NAMESPACE, mapping_key))
-                mapping_method = "known_identity_exact_occurrence" if matches else "source_identity"
-            result["events"][event_id] = {"event_id": event_id, "match_key": match_key}
-            result["mappings"][mapping_key] = {
-                "source_id": source["source_id"], "record_type": "event",
-                "vendor_id": record["vendor_event_id"], "event_id": event_id,
-                "mapping_method": mapping_method,
-            }
-            record_id = str(uuid5(NAMESPACE, digest(record)))
-            result["records"][record_id] = {
-                **record, "source_record_id": record_id, "event_id": event_id,
-                "payload_hash": digest(raw), "collection_run_key": run_key,
-            }
-            run["item_count"] += 1
+            event_id = matches[0] if matches else str(uuid5(NAMESPACE, mapping_key))
+            mapping_method = "known_identity_exact_occurrence" if matches else "source_identity"
+        result["events"][event_id] = {"event_id": event_id, "match_key": match_key}
+        result["mappings"][mapping_key] = {
+            "source_id": source["source_id"], "record_type": "event",
+            "vendor_id": record["vendor_event_id"], "event_id": event_id,
+            "mapping_method": mapping_method,
+        }
+        record_id = str(uuid5(NAMESPACE, digest(record)))
+        result["records"][record_id] = {
+            **record, "source_record_id": record_id, "event_id": event_id,
+            "payload_hash": digest(raw), "collection_run_key": run_key,
+        }
+        run["item_count"] += 1
+
+
+def ingest_collection(state: dict, source: dict, logical_key: str, collection: dict,
+                      now: datetime) -> dict:
+    """Reconcile a live adapter's mapped records through the same path as fixtures.
+
+    source is the owner-approved registry entry (source_registry), never the payload:
+    the incoming collection carries records only, so it cannot grant itself rights.
+    Canonical artists and venues must already exist; unmapped identities go to review.
+    A skipped or not-modified collection made no observation and changes nothing.
+    """
+    if source.get("kind") != "provider":
+        raise DiscoveryError("provider_source_required")
+    status = collection.get("status")
+    if status in {"skipped", "not_modified"}:
+        return copy.deepcopy(state)
+    if status not in {"succeeded", "empty", "failed"}:
+        raise DiscoveryError("invalid_collection_outcome")
+    result = copy.deepcopy(state)
+    result.setdefault("unresolved", {})
+    source_id = identifier(source["source_id"])
+    prior = result["sources"].get(source_id)
+    for kind, field in (("artists", "artist_mappings"), ("venues", "venue_mappings")):
+        for vendor, target in source[field].items():
+            if identifier(target) not in result["identities"][kind]:
+                raise DiscoveryError("unresolved_typed_identity")
+            if prior and vendor in prior[field] and prior[field][vendor] != target:
+                raise DiscoveryError("identity_crosswalk_revision_requires_review")
+    result["sources"][source_id] = copy.deepcopy(source)
+    batch = {"source_id": source_id, "logical_key": logical_key, "outcome": status,
+             "records": list(collection.get("records", [])) if status == "succeeded" else []}
+    _ingest_batch(result, {source_id: result["sources"][source_id]}, batch, now, provider_url)
     return result
 
 
@@ -361,7 +438,7 @@ def project_feed(state: dict, now: datetime) -> dict:
     grouped: dict[str, list[dict]] = {}
     for record in state["records"].values():
         source = state["sources"][record["source_id"]]
-        if (all(permitted(source, use, now) for use in ("display", "raw_retention", "derived_retention"))
+        if (all(permitted(source, use, now) for use in DISPLAY_USES)
                 and record["permission_id"] == source["permission"]["permission_id"]):
             grouped.setdefault(record["event_id"], []).append(record)
     events = []
@@ -369,8 +446,7 @@ def project_feed(state: dict, now: datetime) -> dict:
     unresolved = []
     for record in state.get("unresolved", {}).values():
         source = state["sources"][record["source_id"]]
-        if (all(permitted(source, use, now) for use in
-                ("display", "raw_retention", "derived_retention"))
+        if (all(permitted(source, use, now) for use in DISPLAY_USES)
                 and record["permission_id"] == source["permission"]["permission_id"]):
             unresolved.append({k: record[k] for k in (
                 "source_record_id", "source_id", "vendor_event_id", "title", "reason")})
@@ -404,6 +480,7 @@ def project_feed(state: dict, now: datetime) -> dict:
                        "performers": performers, "starts_at": latest["starts_at"],
                        "local_date": latest["local_date"], "timezone": latest["timezone"],
                        "time_tba": latest["starts_at"] is None, "status": latest["status"],
+                       "onsale_at": latest.get("onsale_at"),
                        "first_seen_at": first_seen.isoformat(),
                        "observed_at": observed.isoformat(), "available_at": latest["available_at"],
                        "fresh_until": fresh_until.isoformat(), "stale": now >= fresh_until,
@@ -432,6 +509,44 @@ def project_feed(state: dict, now: datetime) -> dict:
             "unresolved": sorted(unresolved, key=lambda r: r["source_record_id"])}
 
 
+def lead_time_report(state: dict, now: datetime) -> dict:
+    """Which source makes each event knowable first (SS-DATA-0.1 available_at).
+
+    Internal measurement for the Phase 3 question "do official monitors beat the
+    listing APIs?". Only stored, reconciled observations whose source still permits
+    derived retention count; unresolved records have no canonical event to compare.
+    """
+    first_by_event: dict[str, dict[str, datetime]] = {}
+    for record in state["records"].values():
+        source = state["sources"][record["source_id"]]
+        if (not permitted(source, "derived_retention", now)
+                or record["permission_id"] != source["permission"]["permission_id"]):
+            continue
+        seen = first_by_event.setdefault(record["event_id"], {})
+        available = timestamp(record["available_at"])
+        if record["source_id"] not in seen or available < seen[record["source_id"]]:
+            seen[record["source_id"]] = available
+    totals = {}
+    for seen in first_by_event.values():
+        earliest = min(seen.values())
+        for source_id, available in seen.items():
+            row = totals.setdefault(source_id, {"events_seen": 0, "events_first": 0, "lags": []})
+            row["events_seen"] += 1
+            row["events_first"] += available == earliest  # Ties count as first for each.
+            if len(seen) > 1:
+                row["lags"].append((available - earliest).total_seconds() / 60)
+    sources = []
+    for source_id, row in sorted(totals.items()):
+        lags = sorted(row["lags"])
+        middle = len(lags) // 2
+        median = None if not lags else (
+            lags[middle] if len(lags) % 2 else (lags[middle - 1] + lags[middle]) / 2)
+        sources.append({"source_id": source_id, "name": state["sources"][source_id]["name"],
+                        "events_seen": row["events_seen"], "events_first": row["events_first"],
+                        "shared_events": len(lags), "median_lag_minutes": median})
+    return {"basis": "available_at", "events": len(first_by_event), "sources": sources}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
@@ -448,6 +563,7 @@ def main() -> None:
                           "records": len(result["records"]),
                           "unresolved": len(result.get("unresolved", {})),
                           "provider_network_calls": 0,
+                          "lead_times": lead_time_report(result, datetime.now(UTC)),
                           "runs": [{k: r[k] for k in ("source_id", "logical_key", "digest",
                                    "status", "item_count")} for _, r in sorted(result["runs"].items())]}))
     except (DiscoveryError, OSError, ValueError, KeyError, TypeError) as exc:

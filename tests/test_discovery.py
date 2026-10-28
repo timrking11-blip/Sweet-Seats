@@ -52,7 +52,7 @@ class DiscoveryTests(unittest.TestCase):
         self.assertEqual(before, self.store.path.read_bytes())
 
     def test_unknown_collection_and_retention_rights_block_ingestion(self):
-        for use in ("collect", "raw_retention", "derived_retention"):
+        for use in ("collect", "derived_retention"):
             fixture = copy.deepcopy(self.fixture)
             for source in fixture["sources"]:
                 source["permission"]["uses"].pop(use)
@@ -60,6 +60,13 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(state["events"], {})
             self.assertEqual(state["records"], {})
             self.assertTrue(all(r["status"] == "skipped" for r in state["runs"].values()))
+
+    def test_raw_retention_is_not_required_for_stored_normalized_records(self):
+        for source in self.fixture["sources"]:
+            source["permission"]["uses"]["raw_retention"] = False
+        state = ingest(empty_state(), self.fixture, NOW)
+        self.assertEqual(len(state["records"]), 4)
+        self.assertTrue(all(r["status"] == "succeeded" for r in state["runs"].values()))
 
     def test_display_is_separate_and_unknown_denies_read_after_persistence(self):
         for source in self.fixture["sources"]:
