@@ -44,7 +44,13 @@ Ticketmaster Discovery?
 - One total elapsed-time budget (`timeout`, default 10 s) covers the whole fetch: DNS,
   connection, TLS handshake, response headers, body reads and every redirect. Each
   step runs under the time left, and a watchdog shuts the socket at the deadline, so
-  a slow-drip response ends as `deadline_exceeded`.
+  a slow-drip response ends as `deadline_exceeded`. The watchdog shuts down the active
+  TLS socket, including while the response owns a connection-closing socket. HTTP/1.0,
+  `Connection: close` and EOF-delimited responses are supported.
+- At most four blocking DNS/transport operations may be outstanding per process. A
+  timed-out non-cancellable resolver keeps its slot until it exits; once capacity is
+  exhausted, new work fails closed as `operation_capacity_exceeded`. No unbounded
+  background thread accumulation is allowed.
 - The feed configuration is checked before any request: kind, configured identity,
   an IANA time zone, and an https URL of printable ASCII with no userinfo. Anything
   else is `skipped` with a fixed code and no network call. Conditional-GET validators

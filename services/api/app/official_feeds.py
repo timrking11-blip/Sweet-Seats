@@ -47,6 +47,9 @@ ADAPTER_VERSION = "official-ics-0.1"
 ENABLE_FLAG = "SWEET_SEATS_OFFICIAL_FEEDS_ENABLED"
 MAX_BODY_BYTES = 2_000_000
 MAX_REDIRECTS = 3
+# A system resolver or injected transport may ignore cancellation. Such work keeps
+# its slot until it exits, preventing repeated deadlines from accumulating threads.
+_OPERATION_SLOTS = threading.BoundedSemaphore(4)
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 FEED_TIMEZONE = "America/New_York"
 STATUS = {"CONFIRMED": "scheduled", "CANCELLED": "cancelled", "TENTATIVE": "unknown"}
@@ -346,6 +349,8 @@ def _bounded(call: Callable[[], object], remaining: float):
     """
     if remaining <= 0:
         raise FeedError("deadline_exceeded")
+    if not _OPERATION_SLOTS.acquire(blocking=False):
+        raise FeedError("operation_capacity_exceeded")
     box: dict = {}
 
     def target():
@@ -353,9 +358,15 @@ def _bounded(call: Callable[[], object], remaining: float):
             box["value"] = call()
         except BaseException as exc:  # noqa: BLE001 - handed back to the caller below.
             box["error"] = exc
+        finally:
+            _OPERATION_SLOTS.release()
 
-    worker = threading.Thread(target=target, daemon=True)
-    worker.start()
+    worker = threading.Thread(target=target, daemon=True, name="sweet-seats-feed-operation")
+    try:
+        worker.start()
+    except BaseException:
+        _OPERATION_SLOTS.release()
+        raise
     worker.join(remaining)
     if worker.is_alive():
         raise FeedError("deadline_exceeded")
@@ -378,6 +389,10 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         self._deadline = time.monotonic() + timeout
         self._raw: socket.socket | None = None
         self.aborted = threading.Event()
+        # http.client can clear self.sock when the response owns a closing connection.
+        # Keep the active socket independently, including during the TLS handshake.
+        self._io_socket: socket.socket | None = None
+        self._socket_lock = threading.Lock()
 
     def remaining(self) -> float:
         left = self._deadline - time.monotonic()
@@ -389,29 +404,65 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         return self.aborted.is_set() or time.monotonic() >= self._deadline
 
     def connect(self):
-        self._raw = socket.create_connection((self._address, self.port), self.remaining())
-        self._raw.settimeout(self.remaining())  # The TLS handshake runs under this.
-        self.sock = self._tls.wrap_socket(self._raw, server_hostname=self.host)
+        raw = socket.create_connection((self._address, self.port), self.remaining())
+        with self._socket_lock:
+            if self.aborted.is_set():
+                raw.close()
+                raise FeedError("deadline_exceeded")
+            self._raw = raw
+            raw.settimeout(self.remaining())
+            # Register the SSLSocket before starting a potentially blocking handshake.
+            # wrap_socket detaches raw, so abort must use the new socket from now on.
+            self._io_socket = self._tls.wrap_socket(
+                raw, server_hostname=self.host, do_handshake_on_connect=False)
+            self.sock = self._io_socket
+        self.sock.do_handshake()
+
+    def retain_socket(self):
+        # Also supports the plain loopback connection used in transport tests.
+        with self._socket_lock:
+            if self._io_socket is None:
+                self._io_socket = self.sock
+        self.remaining()
 
     def abort(self):
         self.aborted.set()
+        with self._socket_lock:
+            active = self._io_socket or self._raw
+            if active is not None:
+                try:
+                    active.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+    def set_read_timeout(self):
+        active = self._io_socket
+        if active is None:
+            raise FeedError("network_error")
+        active.settimeout(self.remaining())
+
+    def close(self):
+        super().close()
+        # A response with Connection: close still owns its file object; closing the
+        # retained socket here is safe, and the response is closed by the transport.
+        if self._io_socket is not None:
+            self._io_socket.close()
         if self._raw is not None:
-            try:
-                self._raw.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
+            self._raw.close()
 
 
 def _read_body(conn: _PinnedHTTPSConnection, response) -> bytes:
     """Read until the end of the body or just past the size cap, under the budget."""
     chunks, size = [], 0
     while size <= MAX_BODY_BYTES:
-        conn.sock.settimeout(conn.remaining())
+        conn.set_read_timeout()
         chunk = response.read1(65536)  # Returns as soon as any bytes arrive.
         if not chunk:
             break
         chunks.append(chunk)
         size += len(chunk)
+        if response.isclosed():
+            break
     return b"".join(chunks)
 
 
@@ -423,9 +474,11 @@ def _pinned_transport(url: str, address: str, headers: Mapping[str, str], timeou
     watchdog = threading.Timer(timeout, conn.abort)
     watchdog.daemon = True
     watchdog.start()
+    response = None
     try:
         conn.connect()
-        conn.sock.settimeout(conn.remaining())
+        conn.retain_socket()
+        conn.set_read_timeout()
         conn.request("GET", target, headers={"User-Agent": "sweet-seats-monitor/0.1",
                                              "Accept": "text/calendar", **headers})
         response = conn.getresponse()
@@ -438,6 +491,9 @@ def _pinned_transport(url: str, address: str, headers: Mapping[str, str], timeou
         raise FeedError("deadline_exceeded" if conn.expired() else "network_error") from None
     finally:
         watchdog.cancel()
+        watchdog.join()
+        if response is not None:
+            response.close()
         conn.close()
 
 

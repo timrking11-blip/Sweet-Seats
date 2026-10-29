@@ -23,6 +23,10 @@ alter table public.alerts
 -- worker recovers them through the normal expired-lease path.
 update public.alerts set claim_token = gen_random_uuid() where status = 'sending';
 
+-- Historical failed alerts predate last_error_code. Backfill before validating the
+-- terminal-state constraint; preserve their IDs, state and delivery history.
+update public.alerts set last_error_code = 'legacy_delivery_failed' where status = 'failed';
+
 alter table public.alerts
   drop constraint alerts_status_check,
   add constraint alerts_status_check
