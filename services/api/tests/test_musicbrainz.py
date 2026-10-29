@@ -622,3 +622,55 @@ def test_supabase_finish_run_calls_rpc_with_fixed_fields():
         "run_id": str(run_id), "run_status": "failed", "run_item_count": 0,
         "run_error_code": "network_error",
     }
+
+
+# --- Field/use boundary (docs/metabrainz-readiness.md) --------------------------------
+# A future core-data (CC0) permission covers only MBID, name and disambiguation.
+# Supplementary data (tags and genre associations, ratings, annotations, search indexes)
+# is CC BY-NC-SA and must never be requested or kept under that permission.
+
+# Fields the resolver never asks for or keeps: supplementary data (tags, genre
+# associations, ratings, annotations) and core fields it does not need yet (aliases,
+# sort name), which would need the matrix and permission scope updated first.
+NOT_REQUESTED = {"tags": [{"name": "indie", "count": 3}], "genres": [{"name": "indie rock"}],
+                 "rating": {"value": 4.5, "votes-count": 2}, "annotation": "user text",
+                 "aliases": [{"name": "TA"}], "sort-name": "Artist, Test"}
+
+
+@pytest.mark.parametrize("call", ["search", "lookup"])
+def test_only_core_identity_fields_are_requested_or_kept(call):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        body = {**artist_json(), **NOT_REQUESTED}
+        return httpx.Response(200, json={"artists": [body]} if call == "search" else body)
+
+    client = mb_client(handler)
+    result = client.search_artists("Test Artist")[0] if call == "search" else client.get_artist(MBID)
+    # No include parameter: tags, genres, ratings and aliases are never asked for.
+    assert "inc" not in seen[0].url.params
+    # Only identity fields survive parsing; the search score is a transient match signal.
+    assert set(result.model_dump(exclude_none=True)) <= {"mbid", "name", "score"}
+    assert set(ArtistCandidate.model_fields) == {"mbid", "name", "disambiguation", "score"}
+
+
+def test_the_cache_write_carries_no_score_or_supplementary_field():
+    sent = []
+
+    def handler(request):
+        sent.append((request.url.path, json.loads(request.content or b"null")))
+        if request.url.path.endswith("/musicbrainz_artist_by_mbid"):
+            return httpx.Response(200, json=[{
+                "artist_id": str(uuid4()), "mbid": str(MBID), "canonical_name": "Test Artist",
+                "disambiguation": None, "mapping_confidence": 1.0,
+                "mapping_method": "musicbrainz-lookup"}])
+        return httpx.Response(200, json=None)
+
+    cache = SupabaseArtistCache("https://project.supabase.invalid", "service-key",
+                                http=httpx.Client(transport=httpx.MockTransport(handler)))
+    cache.store(ArtistCandidate(mbid=MBID, name="Test Artist", score=100), confidence=1.0,
+                method="musicbrainz-lookup", collection_run_id=uuid4())
+    (payload,) = [body for path, body in sent if path.endswith("/cache_musicbrainz_artist")]
+    assert set(payload) == {"requested_mbid", "artist_name", "artist_disambiguation",
+                            "confidence", "method", "run_id"}

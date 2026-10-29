@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, HttpUrl
 
 from .discovery import DiscoveryError
 from .discovery_postgres import DiscoveryStore, configured_store
+from .me import router as me_router
 
 app = FastAPI(
     title="Sweet Seats API",
@@ -23,7 +24,9 @@ async def discovery_cache_policy(request: Request, call_next):
     a temporary denial cannot become a cached substitute for the next check.
     """
     response = await call_next(request)
-    if request.url.path == "/v1/events" or request.url.path.startswith("/v1/events/"):
+    path = request.url.path
+    # Signed-in responses are per user and must never be shared by a cache either.
+    if path in {"/v1/events", "/v1/me"} or path.startswith(("/v1/events/", "/v1/me/")):
         response.headers["Cache-Control"] = "private, no-store, max-age=0"
         response.headers["CDN-Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
@@ -110,3 +113,5 @@ def event_detail(event_id: UUID, store: DiscoveryStore = Depends(discovery_store
         raise HTTPException(status_code=404, detail="Event unavailable or not permitted for display.")
     return {"mode": feed["mode"], "generated_at": feed["generated_at"], "event": event}
 
+
+app.include_router(me_router)

@@ -717,3 +717,157 @@ def test_expiry_between_subscriptions_suppresses_the_next_send(pg_store):
         assert len(transport.sent) == 1
         reasons = sorted(str(d["suppressed_reason"]) for d in deliveries(conn).values())
         assert reasons == ["None", "expired"]
+
+
+# --- Send-time eligibility (Phase 2 closure) -----------------------------------------
+# The trigger, the follow and the clock are re-checked before every send, not only
+# consent and display permission. See docs/contracts/alerts-runtime-v0.1.md.
+
+
+def changed(feed, event_id, **fields):
+    """A later projection of the feed in which one event's facts have changed."""
+    later = copy.deepcopy(feed)
+    next(e for e in later["events"] if e["event_id"] == str(event_id)).update(fields)
+    return later
+
+
+def queue_trigger(store, feed, artists, trigger):
+    """One queued alert of the given trigger type for a fresh follower; returns it."""
+    with connect(store) as setup:
+        user = add_user(setup, artists)
+        intents = [i for i in plan_alerts(feed, [(user, a) for a in artists], NOW)
+                   if i.trigger_type == trigger]
+        assert intents, f"fixture has no {trigger} alert"
+        enqueue_alerts(setup, intents[:1], NOW)
+        (alert,) = alerts(setup)
+    return alert
+
+
+def test_a_cancellation_after_planning_suppresses_the_queued_announcement(pg_store):
+    store, feed, artists = seeded(pg_store)
+    alert = queue_trigger(store, feed, artists, "announced")
+    transport = LogTransport()
+    with connect(store) as conn:
+        # Planned while scheduled; cancelled before the dispatcher reached it.
+        current = changed(feed, alert["event_id"], status="cancelled")
+        assert dispatch_due(conn, transport, current, NOW, "w1")["suppressed"] == 1
+        assert alerts(conn)[0]["suppressed_reason"] == "trigger_obsolete"
+    assert transport.sent == []  # Never "Just announced" for a cancelled show.
+
+
+def test_a_source_gone_stale_after_planning_is_reported_as_stale(pg_store):
+    store, feed, artists = seeded(pg_store)
+    alert = queue_trigger(store, feed, artists, "announced")
+    with connect(store) as conn:
+        current = changed(feed, alert["event_id"], stale=True)
+        assert dispatch_due(conn, LogTransport(), current, NOW, "w1")["suppressed"] == 1
+        assert alerts(conn)[0]["suppressed_reason"] == "stale_source"
+
+
+def test_a_moved_onsale_time_suppresses_the_obsolete_onsale_alert(pg_store):
+    store, fixture = pg_store
+    for batch in fixture["batches"]:
+        for record in batch["records"]:
+            if record["vendor_event_id"] in {"artist-101", "venue-202"}:
+                record["onsale_at"] = "2026-10-18T07:30:00Z"
+    store.seed(fixture, NOW)
+    feed = store.feed(NOW)
+    artists = sorted({p["artist_id"] for e in feed["events"] if e["onsale_at"]
+                      for p in e["performers"]})
+    alert = queue_trigger(store, feed, artists, "onsale_soon")
+    transport = LogTransport()
+    with connect(store) as conn:
+        # The on-sale moved a week later after the "within the hour" alert was queued.
+        current = changed(feed, alert["event_id"], onsale_at="2026-10-25T07:30:00Z")
+        assert dispatch_due(conn, transport, current, NOW, "w1")["suppressed"] == 1
+        assert alerts(conn)[0]["suppressed_reason"] == "trigger_obsolete"
+    assert transport.sent == []
+
+
+def test_a_cancellation_between_subscriptions_suppresses_the_next_send(pg_store):
+    conn, feed = two_channel_alert(pg_store)
+    with conn:
+        (alert,) = alerts(conn)
+        assert alert["trigger_type"] == "announced"
+        live = {"feed": feed}
+
+        class Cancelling(LogTransport):
+            def send(self, channel, endpoint_ref, message, key):
+                live["feed"] = changed(feed, alert["event_id"], status="cancelled")
+                return super().send(channel, endpoint_ref, message, key)
+
+        transport = Cancelling()
+        dispatch_due(conn, transport, feed, NOW, "w1",
+                     lookup=lambda event_id, at: feed_lookup(live["feed"])(event_id, at))
+        assert len(transport.sent) == 1
+        reasons = sorted(str(d["suppressed_reason"]) for d in deliveries(conn).values())
+        assert reasons == ["None", "trigger_obsolete"]
+
+
+def test_an_unfollow_between_subscriptions_suppresses_the_next_send(pg_store):
+    conn, feed = two_channel_alert(pg_store)
+    with conn:
+        other = other_connection(conn)
+
+        class Unfollowing(LogTransport):
+            def send(self, channel, endpoint_ref, message, key):
+                other.execute("UPDATE artist_follows SET enabled = false")
+                return super().send(channel, endpoint_ref, message, key)
+
+        transport = Unfollowing()
+        dispatch_due(conn, transport, feed, NOW, "w1")
+        other.close()
+        assert len(transport.sent) == 1
+        reasons = sorted(str(d["suppressed_reason"]) for d in deliveries(conn).values())
+        assert reasons == ["None", "not_following"]
+
+
+def test_an_unfollow_before_dispatch_suppresses_the_alert(pg_store):
+    store, feed, artists = seeded(pg_store)
+    queue_one(store, feed, artists)
+    transport = LogTransport()
+    with connect(store) as conn:
+        conn.execute("DELETE FROM artist_follows")
+        assert dispatch_due(conn, transport, feed, NOW, "w1")["suppressed"] == 1
+        assert alerts(conn)[0]["suppressed_reason"] == "not_following"
+    assert transport.sent == []
+
+
+@pytest.mark.parametrize(("offset", "outcome"), [
+    (-timedelta(microseconds=1), "sent"), (timedelta(0), "suppressed")])
+def test_the_expiry_boundary_is_exclusive(pg_store, offset, outcome):
+    store, feed, artists = seeded(pg_store)
+    queue_one(store, feed, artists)
+    with connect(store) as conn:
+        (alert,) = conn.execute("UPDATE alerts SET expires_at = %s RETURNING *",
+                                (NOW + timedelta(minutes=1),)).fetchall()
+        at = alert["expires_at"] + offset
+        assert dispatch_due(conn, LogTransport(), feed, NOW, "w1", clock=lambda: at)[outcome] == 1
+        if outcome == "suppressed":
+            assert alerts(conn)[0]["suppressed_reason"] == "expired"
+
+
+def test_planning_skips_users_who_requested_deletion(pg_store):
+    store, _, artists = seeded(pg_store)
+    with connect(store) as conn:
+        user = add_user(conn, artists)
+        conn.execute("UPDATE user_profiles SET deletion_requested_at = %s WHERE user_id = %s",
+                     (NOW - timedelta(minutes=1), user))
+    result = tick(store, LogTransport(), NOW, "w1")
+    assert (result["plan"]["planned"], result["plan"]["created"]) == (0, 0)
+
+
+def test_a_completion_after_the_lease_expired_is_rejected_then_rerun(pg_store):
+    # No takeover happened, but the worker outlived its lease: its result is refused on a
+    # fresh clock, and the job is re-claimed after its backoff. The work it did before the
+    # refusal must be idempotent (planning) or fenced on its own (each alert claim).
+    store, _ = pg_store
+    late = NOW + LEASE + timedelta(seconds=1)
+    with connect(store) as conn:
+        assert run_job(conn, "collect", "k", lambda: {"n": 1}, NOW, "w",
+                       clock=lambda: late) == {"status": "lease_lost"}
+        (job,) = conn.execute("SELECT * FROM job_runs").fetchall()
+        assert (job["status"], job["attempt"]) == ("running", 1)
+        retry = late + timedelta(minutes=2)
+        assert run_job(conn, "collect", "k", lambda: {"n": 2}, retry, "w") == {
+            "status": "succeeded", "n": 2}
