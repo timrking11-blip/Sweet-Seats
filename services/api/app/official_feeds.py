@@ -11,6 +11,13 @@ Requests go only to the host of the source's owner-approved official_url, over h
 on port 443, and only to an address that resolves as public. The connection is pinned
 to the address that was checked, so DNS cannot swap in another one. Redirects are
 followed by hand: at most MAX_REDIRECTS, each to the same approved host, each re-checked.
+One elapsed-time budget covers the whole fetch: every DNS lookup, connection, TLS
+handshake, response header and body read, across all redirects. Invalid feed
+configuration is refused with a fixed code before any request.
+
+Recurring events are not expanded. A UID group carrying a recurrence rule, recurrence
+dates, exclusions or an overridden instance is skipped whole with one fixed reason,
+never mapped as its first occurrence; so is a UID that appears more than once.
 
 Identity is never decided by name. A venue feed's venue and an artist feed's artist
 come from the feed configuration. Other names in the calendar (support acts, the
@@ -20,16 +27,19 @@ unmapped key goes to the review queue.
 """
 from __future__ import annotations
 
+import functools
 import http.client
 import ipaddress
 import os
 import re
 import socket
 import ssl
+import threading
+import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime
 from urllib.parse import urljoin, urlsplit
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, available_timezones
 
 from .discovery import DiscoveryError, permitted, provider_url
 
@@ -40,11 +50,20 @@ MAX_REDIRECTS = 3
 REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 FEED_TIMEZONE = "America/New_York"
 STATUS = {"CONFIRMED": "scheduled", "CANCELLED": "cancelled", "TENTATIVE": "unknown"}
+# Properties that make a VEVENT part of a recurring series (RFC 5545 3.8.4.4, 3.8.5).
+RECURRENCE = frozenset({"RRULE", "RDATE", "EXDATE", "EXRULE", "RECURRENCE-ID"})
+# The configured identity each feed kind must carry.
+IDENTITY_FIELDS = {"venue": "vendor_venue_id", "artist": "vendor_artist_id"}
+# Whitespace, control characters, non-ASCII and backslashes: never in a URL we request.
+UNSAFE_URL = re.compile(r"[^\x21-\x7e]|\\")
+# A validator we are willing to send back as a request header: short printable ASCII.
+HEADER_VALUE = re.compile(r"[\x20-\x7e]{1,256}")
 # Separators for co-billed acts in a venue calendar SUMMARY, in priority order.
 BILLING_SEPARATORS = re.compile(r"\s+(?:\+|w/|with|&)\s+", re.IGNORECASE)
 
 # (status, headers, body) for one GET of url, connecting only to the given, already
-# checked IP address, with request headers and a timeout. Never follows redirects.
+# checked IP address, with request headers. The last argument is the seconds left in the
+# fetch's total budget; the call must finish within it. Never follows redirects.
 Transport = Callable[[str, str, Mapping[str, str], float], tuple[int, Mapping[str, str], bytes]]
 # The IP addresses a host name resolves to, for (host, port).
 Resolver = Callable[[str, int], list[str]]
@@ -67,6 +86,37 @@ def vendor_key(prefix: str, name: str) -> str:
     if not slug:
         raise FeedError("empty_vendor_key")
     return f"{prefix}:{slug[:120]}"
+
+
+@functools.cache
+def _zones() -> frozenset[str]:
+    return frozenset(available_timezones())
+
+
+def _zone(key: object, code: str) -> ZoneInfo:
+    """An IANA zone by its exact key; anything else (Windows names, paths) raises code."""
+    if not isinstance(key, str) or key not in _zones():
+        raise FeedError(code)
+    return ZoneInfo(key)
+
+
+def check_feed(feed: object) -> None:
+    """Raise a fixed code unless the feed configuration is complete and valid.
+
+    fetch_feed checks it before any request, and map_feed before mapping.
+    """
+    if not isinstance(feed, Mapping):
+        raise FeedError("invalid_feed_config")
+    if feed.get("kind") not in IDENTITY_FIELDS:
+        raise FeedError("unsupported_feed_kind")
+    identity = feed.get(IDENTITY_FIELDS[feed["kind"]])
+    if not isinstance(identity, str) or not 0 < len(identity.strip()) <= 200:
+        raise FeedError("missing_feed_identity")
+    _zone(feed.get("timezone", FEED_TIMEZONE), "invalid_timezone")
+    url = feed.get("url")
+    if not isinstance(url, str) or UNSAFE_URL.search(url):
+        raise FeedError("invalid_provider_url")
+    provider_url(url)
 
 
 def _unescape(value: str) -> str:
@@ -116,20 +166,22 @@ def parse_ics(text: str) -> list[dict]:
 def _start(prop: tuple[dict, str], feed_tz: str) -> tuple[str | None, str]:
     """(starts_at UTC or None, local_date) from a DTSTART property."""
     params, value = prop
-    tz = ZoneInfo(feed_tz)
+    tz = _zone(feed_tz, "invalid_timezone")
     try:
         if params.get("VALUE") == "DATE" or re.fullmatch(r"\d{8}", value):
+            if not re.fullmatch(r"\d{8}", value):
+                raise ValueError(value)
             return None, date(int(value[:4]), int(value[4:6]), int(value[6:8])).isoformat()
-        parsed = datetime.strptime(value.rstrip("Z"), "%Y%m%dT%H%M%S")
-        if value.endswith("Z"):
-            moment = parsed.replace(tzinfo=UTC)
-        elif "TZID" in params:
-            moment = parsed.replace(tzinfo=ZoneInfo(params["TZID"].strip('"')))
-        else:
-            # Floating time with no zone: the calendar's local wall time is unknown.
-            raise FeedError("floating_start_time")
-    except (ValueError, KeyError, ZoneInfoNotFoundError):
+        parsed = datetime.strptime(value.removesuffix("Z"), "%Y%m%dT%H%M%S")
+    except ValueError:
         raise FeedError("invalid_start") from None
+    if value.endswith("Z"):
+        moment = parsed.replace(tzinfo=UTC)
+    elif "TZID" in params:
+        moment = parsed.replace(tzinfo=_zone(params["TZID"].strip('"'), "unsupported_timezone"))
+    else:
+        # Floating time with no zone: the calendar's local wall time is unknown.
+        raise FeedError("floating_start_time")
     return (moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
             moment.astimezone(tz).date().isoformat())
 
@@ -146,6 +198,8 @@ def map_event(event: dict, feed: Mapping, observed_at: datetime) -> dict:
     if "DTSTART" not in event:
         raise FeedError("missing_start")
     vendor_event_id = _text(event, "UID", "missing_uid")
+    if RECURRENCE & set(event):
+        raise FeedError("unsupported_recurrence")
     title = _text(event, "SUMMARY", "missing_summary")
     starts_at, local_date = _start(event["DTSTART"], feed.get("timezone", FEED_TIMEZONE))
     if feed["kind"] == "venue":
@@ -185,17 +239,34 @@ def map_event(event: dict, feed: Mapping, observed_at: datetime) -> dict:
 
 
 def map_feed(text: str, feed: Mapping, observed_at: datetime) -> dict:
-    """Map a whole calendar; one malformed event is skipped, not the whole feed."""
+    """Map a whole calendar; one malformed event is skipped, not the whole feed.
+
+    Events are grouped by UID first. A group with a recurrence property in any member
+    (the series master or an overridden instance) is skipped whole as
+    unsupported_recurrence; a UID repeated without one is skipped as duplicate_uid. No
+    series becomes a misleading first occurrence, and no vendor event ID repeats.
+    """
+    check_feed(feed)
     records, display, skipped = [], {}, []
+    groups: dict[str, list[dict]] = {}
     for event in parse_ics(text):
-        try:
-            mapped = map_event(event, feed, observed_at)
-        except DiscoveryError as exc:
-            uid = event.get("UID", ({}, None))[1]
-            skipped.append({"vendor_event_id": uid, "error_code": str(exc)})
+        groups.setdefault(event.get("UID", ({}, ""))[1].strip(), []).append(event)
+    for uid, group in groups.items():
+        if uid and any(RECURRENCE & set(event) for event in group):
+            skipped.append({"vendor_event_id": uid, "error_code": "unsupported_recurrence"})
             continue
-        records.append(mapped["record"])
-        display[mapped["record"]["vendor_event_id"]] = mapped["display"]
+        if uid and len(group) > 1:
+            skipped.append({"vendor_event_id": uid, "error_code": "duplicate_uid"})
+            continue
+        for event in group:  # One event, or every event without a UID (each is skipped).
+            try:
+                mapped = map_event(event, feed, observed_at)
+            except DiscoveryError as exc:
+                uid = event.get("UID", ({}, None))[1]
+                skipped.append({"vendor_event_id": uid, "error_code": str(exc)})
+                continue
+            records.append(mapped["record"])
+            display[mapped["record"]["vendor_event_id"]] = mapped["display"]
     return {"records": records, "display": display, "skipped": skipped}
 
 
@@ -204,14 +275,16 @@ def public_address(value: str) -> bool:
 
     Rejects private, loopback, link-local, multicast, reserved, unspecified, shared
     (100.64.0.0/10), documentation and site-local addresses, scoped IPv6 addresses, and
-    every IPv6 form that embeds an IPv4 address (IPv4-mapped, 6to4, Teredo, NAT64).
+    every IPv6 form that embeds an IPv4 address (IPv4-compatible ::/96, IPv4-mapped,
+    6to4, Teredo, NAT64).
     """
     try:
         address = ipaddress.ip_address(value)
     except ValueError:
         return False
     if isinstance(address, ipaddress.IPv6Address) and (
-            address.scope_id or address.ipv4_mapped or address.sixtofour or address.teredo
+            address.scope_id or address.packed[:12] == bytes(12) or address.ipv4_mapped
+            or address.sixtofour or address.teredo
             or any(address in prefix for prefix in NAT64) or address.is_site_local):
         return False
     return (address.is_global and not address.is_multicast and not address.is_private
@@ -221,19 +294,26 @@ def public_address(value: str) -> bool:
 
 def approved_host(source: Mapping) -> str:
     """The one host requests may reach: that of the registry entry's official_url."""
+    official = source.get("official_url")
     try:
-        return urlsplit(provider_url(source.get("official_url"))).hostname
-    except DiscoveryError:
+        if not isinstance(official, str) or UNSAFE_URL.search(official):
+            raise DiscoveryError("invalid_provider_url")
+        return urlsplit(provider_url(official)).hostname
+    except (DiscoveryError, ValueError):
         raise FeedError("host_not_approved") from None
 
 
 def _check_url(url: str, host: str) -> None:
-    """https, no credentials, exactly the approved host, and the default port."""
+    """https, printable ASCII, no userinfo, exactly the approved host, the default port."""
     try:
+        if not isinstance(url, str) or UNSAFE_URL.search(url):
+            raise DiscoveryError("invalid_provider_url")
         parts = urlsplit(provider_url(url))
         port = parts.port
     except (DiscoveryError, ValueError):
         raise FeedError("invalid_provider_url") from None
+    if "@" in parts.netloc:
+        raise FeedError("invalid_provider_url")
     if parts.hostname != host:
         raise FeedError("host_not_approved")
     if port not in (None, 443):
@@ -258,42 +338,127 @@ def _public_address_for(host: str, resolver: Resolver) -> str:
     return addresses[0]
 
 
-class _PinnedHTTPSConnection(http.client.HTTPSConnection):
-    """Connects to one checked address; TLS still verifies the certificate for host."""
+def _bounded(call: Callable[[], object], remaining: float):
+    """call() within remaining seconds of elapsed time, or deadline_exceeded.
 
-    def __init__(self, host: str, address: str, timeout: float):
+    The call runs on a daemon thread, so even a step that ignores timeouts (the system
+    resolver has none) cannot hold the fetch past its budget.
+    """
+    if remaining <= 0:
+        raise FeedError("deadline_exceeded")
+    box: dict = {}
+
+    def target():
+        try:
+            box["value"] = call()
+        except BaseException as exc:  # noqa: BLE001 - handed back to the caller below.
+            box["error"] = exc
+
+    worker = threading.Thread(target=target, daemon=True)
+    worker.start()
+    worker.join(remaining)
+    if worker.is_alive():
+        raise FeedError("deadline_exceeded")
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Connects to one checked address; TLS still verifies the certificate for host.
+
+    Every socket operation is bounded by what is left of the budget, and abort() (the
+    deadline watchdog) shuts the socket down to interrupt a read in progress.
+    """
+
+    def __init__(self, host: str, address: str, timeout: float, port: int = 443):
         self._tls = ssl.create_default_context()
-        super().__init__(host, 443, timeout=timeout, context=self._tls)
+        super().__init__(host, port, timeout=timeout, context=self._tls)
         self._address = address
+        self._deadline = time.monotonic() + timeout
+        self._raw: socket.socket | None = None
+        self.aborted = threading.Event()
+
+    def remaining(self) -> float:
+        left = self._deadline - time.monotonic()
+        if left <= 0 or self.aborted.is_set():
+            raise FeedError("deadline_exceeded")
+        return left
+
+    def expired(self) -> bool:
+        return self.aborted.is_set() or time.monotonic() >= self._deadline
 
     def connect(self):
-        sock = socket.create_connection((self._address, self.port), self.timeout)
-        self.sock = self._tls.wrap_socket(sock, server_hostname=self.host)
+        self._raw = socket.create_connection((self._address, self.port), self.remaining())
+        self._raw.settimeout(self.remaining())  # The TLS handshake runs under this.
+        self.sock = self._tls.wrap_socket(self._raw, server_hostname=self.host)
+
+    def abort(self):
+        self.aborted.set()
+        if self._raw is not None:
+            try:
+                self._raw.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
 
-def _pinned_transport(url: str, address: str, headers: Mapping[str, str], timeout: float):
+def _read_body(conn: _PinnedHTTPSConnection, response) -> bytes:
+    """Read until the end of the body or just past the size cap, under the budget."""
+    chunks, size = [], 0
+    while size <= MAX_BODY_BYTES:
+        conn.sock.settimeout(conn.remaining())
+        chunk = response.read1(65536)  # Returns as soon as any bytes arrive.
+        if not chunk:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    return b"".join(chunks)
+
+
+def _pinned_transport(url: str, address: str, headers: Mapping[str, str], timeout: float,
+                      *, connection: Callable[..., _PinnedHTTPSConnection] | None = None):
     parts = urlsplit(url)
     target = (parts.path or "/") + ("?" + parts.query if parts.query else "")
-    conn = _PinnedHTTPSConnection(parts.hostname, address, timeout)
+    conn = (connection or _PinnedHTTPSConnection)(parts.hostname, address, timeout)
+    watchdog = threading.Timer(timeout, conn.abort)
+    watchdog.daemon = True
+    watchdog.start()
     try:
+        conn.connect()
+        conn.sock.settimeout(conn.remaining())
         conn.request("GET", target, headers={"User-Agent": "sweet-seats-monitor/0.1",
                                              "Accept": "text/calendar", **headers})
         response = conn.getresponse()
-        body = response.read(MAX_BODY_BYTES + 1) if response.status == 200 else b""
+        body = _read_body(conn, response) if response.status == 200 else b""
+        conn.remaining()  # An aborted read can look like a clean end of body.
         return response.status, dict(response.getheaders()), body
-    except (OSError, http.client.HTTPException):
-        raise FeedError("network_error") from None
+    except FeedError:
+        raise
+    except (OSError, http.client.HTTPException, ValueError):
+        raise FeedError("deadline_exceeded" if conn.expired() else "network_error") from None
     finally:
+        watchdog.cancel()
         conn.close()
+
+
+def _validator_headers(validators: Mapping | None) -> dict[str, str]:
+    """Conditional-GET headers from the previous fetch; malformed values are not sent."""
+    headers = {}
+    for header, key in (("If-None-Match", "etag"), ("If-Modified-Since", "last_modified")):
+        value = (validators or {}).get(key)
+        if isinstance(value, str) and HEADER_VALUE.fullmatch(value):
+            headers[header] = value
+    return headers
 
 
 def fetch_feed(source: dict, feed: Mapping, now: datetime, *, validators: Mapping | None = None,
                transport: Transport | None = None, resolver: Resolver | None = None,
                env: Mapping[str, str] | None = None, timeout: float = 10.0) -> dict:
-    """Permission, then the enable flag; both pass before any request is made.
+    """Permission, the enable flag and a valid configuration, all before any request.
 
     The feed URL must be on the source's approved host. Every request, the first and
-    each redirect, is re-checked: same host, port 443, public addresses only.
+    each redirect, is re-checked: same host, port 443, public addresses only. timeout is
+    the total elapsed-time budget for the whole fetch, redirects included.
 
     Sends If-None-Match / If-Modified-Since from the previous fetch, so an unchanged
     calendar costs one small request and returns "not_modified" (not "empty").
@@ -305,26 +470,30 @@ def fetch_feed(source: dict, feed: Mapping, now: datetime, *, validators: Mappin
         return {**result, "status": "skipped", "error_code": "permission_denied"}
     if not enabled(env):
         return {**result, "status": "skipped", "error_code": "provider_disabled"}
-    url = provider_url(feed["url"])
     try:
+        check_feed(feed)
         host = approved_host(source)
-        _check_url(url, host)
-    except FeedError as exc:
+        _check_url(feed["url"], host)
+    except DiscoveryError as exc:
         return {**result, "status": "skipped", "error_code": str(exc)}
-    headers = {}
-    if validators and validators.get("etag"):
-        headers["If-None-Match"] = validators["etag"]
-    if validators and validators.get("last_modified"):
-        headers["If-Modified-Since"] = validators["last_modified"]
+    url = feed["url"]
+    headers = _validator_headers(validators)
+    deadline = time.monotonic() + timeout
+
+    def remaining() -> float:
+        return deadline - time.monotonic()
+
     calls = 0
     try:
         for hop in range(MAX_REDIRECTS + 1):
             if hop:
                 _check_url(url, host)
-            address = _public_address_for(host, resolver or _resolve)
+            address = _bounded(
+                functools.partial(_public_address_for, host, resolver or _resolve), remaining())
             calls += 1
-            status, raw_headers, body = (transport or _pinned_transport)(
-                url, address, headers, timeout)
+            status, raw_headers, body = _bounded(
+                functools.partial(transport or _pinned_transport, url, address, headers,
+                                  remaining()), remaining())
             lower = {str(k).lower(): str(v) for k, v in raw_headers.items()}
             if status not in REDIRECT_STATUSES:
                 break
@@ -335,9 +504,10 @@ def fetch_feed(source: dict, feed: Mapping, now: datetime, *, validators: Mappin
             raise FeedError("too_many_redirects")
     except FeedError as exc:
         return {**result, "status": "failed", "error_code": str(exc), "network_calls": calls}
+    # Keep only validators we would send back next time.
     seen = {"etag": lower.get("etag"), "last_modified": lower.get("last-modified")}
-    base = {**result, "network_calls": calls,
-            "validators": {k: v for k, v in seen.items() if v} or result["validators"]}
+    kept = {k: v for k, v in seen.items() if v and HEADER_VALUE.fullmatch(v)}
+    base = {**result, "network_calls": calls, "validators": kept or result["validators"]}
     if status == 304:
         return {**base, "status": "not_modified", "error_code": None}
     if status != 200:

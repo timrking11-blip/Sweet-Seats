@@ -17,7 +17,12 @@ Ticketmaster Discovery?
 
 - Reads RFC 5545 iCalendar: unfolds lines, reads VEVENTs, ignores nested alarms.
 - `DTSTART` in UTC, with `TZID`, or date-only (`starts_at` null, `time_tba`). A floating
-  time with no zone is rejected rather than guessed.
+  time with no zone is rejected rather than guessed (`floating_start_time`). A `TZID`
+  must be an exact IANA zone key; Windows names or paths are `unsupported_timezone`.
+- Recurring events are not expanded. A UID group with `RRULE`, `RDATE`, `EXDATE`,
+  `EXRULE` or `RECURRENCE-ID` in any member (master or override) is skipped whole as
+  `unsupported_recurrence`; a UID repeated without one is skipped as `duplicate_uid`.
+  No series is reduced to its first occurrence and no vendor event ID repeats.
 - `STATUS` CONFIRMED / CANCELLED / TENTATIVE map to scheduled / cancelled / unknown.
 - Identity is never decided by name. A venue feed's venue and an artist feed's artist
   come from its configuration. Other names become feed-scoped vendor keys
@@ -35,6 +40,15 @@ Ticketmaster Discovery?
   connection is pinned to the checked address, and TLS still verifies the host's
   certificate. Redirects are followed by hand, at most 3, each to the same approved
   host and each re-checked; anything else ends the fetch with a fixed error code.
+  IPv4-compatible IPv6 (`::a.b.c.d`) is refused like the other embedded forms.
+- One total elapsed-time budget (`timeout`, default 10 s) covers the whole fetch: DNS,
+  connection, TLS handshake, response headers, body reads and every redirect. Each
+  step runs under the time left, and a watchdog shuts the socket at the deadline, so
+  a slow-drip response ends as `deadline_exceeded`.
+- The feed configuration is checked before any request: kind, configured identity,
+  an IANA time zone, and an https URL of printable ASCII with no userinfo. Anything
+  else is `skipped` with a fixed code and no network call. Conditional-GET validators
+  that are not short printable ASCII are neither sent nor kept.
 
 ## Provider ingestion and the lead-time comparison
 

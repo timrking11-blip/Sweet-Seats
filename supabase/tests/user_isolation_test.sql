@@ -195,6 +195,7 @@ begin
       ('alerts', 'status'), ('alerts', 'suppressed_reason'), ('alerts', 'attempts'),
       ('alerts', 'next_attempt_at'), ('alerts', 'lease_owner'), ('alerts', 'lease_expires_at'),
       ('alerts', 'expires_at'), ('alerts', 'created_at'), ('alerts', 'sent_at'),
+      ('alerts', 'claim_token'), ('alerts', 'last_error_code'), ('alert_deliveries', 'delivery_key'),
       ('delivery_attempts', 'delivery_attempt_id'), ('delivery_attempts', 'alert_id'),
       ('delivery_attempts', 'subscription_id'), ('delivery_attempts', 'attempt_no'),
       ('delivery_attempts', 'status'), ('delivery_attempts', 'provider_message_id'),
