@@ -2,14 +2,25 @@
 
 NYC-area live music discovery and, once licensed comparable offer history supports it, personalized ticket buy/wait recommendations.
 
-## Current state — 2026-10-18
+## Current state — 2026-10-29
 
-The repository is private. Verified base `da735d5` includes the merged offline research
-contract, fixture-backed discovery feed/API, disabled Discovery adapter, permission/RLS
-tests and dependency fixes through PR #12. This branch completes unresolved-identity
-review, date/status validation, pagination and rendered feed tests. The current
-amendment adds transactional local PostgreSQL persistence; it does not apply remote
-migrations. Nothing is deployed and no provider is activated.
+`main` (`e55f6e0`) holds the fixture-backed discovery feed and API, transactional local
+PostgreSQL persistence, deny-by-default source permissions with RLS and negative
+controls, the MusicBrainz identity resolver with its collection-run ledger, disabled
+Ticketmaster and official-calendar adapters, and the Phase 2 durable jobs and alert
+outbox with fenced claims and delivery intent (PR #27). Branch
+`feat/phase2-auth-closure` adds send-time trigger and follow re-checks, server-written
+consent evidence, and Supabase-token-verified user workflows
+([user API](docs/contracts/user-api-v0.1.md)); it is under review, not merged.
+
+**Nothing is deployed, no provider is activated and no notification reaches a person.**
+No phase has a fully evidenced exit: Phase 0 documentation is complete with owner
+choices open, and Phase 2 is blocked on environments, secrets, scheduling, monitoring
+and a restore exercise. See the
+[phase assessment and gap register](docs/phase-assessment.md),
+[MetaBrainz readiness](docs/metabrainz-readiness.md),
+[asset inventory](docs/asset-inventory.md) and
+[external research handoff](docs/research-handoff.md).
 
 Run the [fixture-to-feed quickstart](docs/contracts/discovery-demo-v0.1.md#run-locally).
 See the [audience-provider evaluation](docs/audience-provider-evaluation.md); the
@@ -51,7 +62,7 @@ Use internal UUIDs with typed vendor mappings. The SS-DATA-0.1 entity dictionary
 
 Next.js/TypeScript PWA; Vercel frontend hosting; Python FastAPI and workers on Render; Supabase PostgreSQL/Auth; Cloudflare R2 private S3-compatible storage when its permission gate opens.
 
-These are recommendations, not provisioned resources. Proposed low-volume base infrastructure estimate: about $41/month before licensed data, training overages, storage/notifications/domain and extra environments. Recheck provider pricing before provisioning.
+These are recommendations, not provisioned resources. A 2026-10-10 planning illustration put the low-volume base at about $41/month before licensed data, training overages, storage/notifications/domain and extra environments; it is not a current forecast. Use the workload model in the [phase assessment](docs/phase-assessment.md#economics-and-pilot-proposed-thresholds-none-approved) and recheck provider pricing before provisioning.
 
 ## Data sources and access
 

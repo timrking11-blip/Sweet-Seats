@@ -70,3 +70,29 @@ def pg_upgrade():
     assert before[-1].name == UPGRADE_BASE and after
     with disposable_store(before) as store:
         yield store, json.loads(DEFAULT_FIXTURE.read_text()), lambda: apply_migrations(store, after)
+
+
+# Fixture signing material for the user API; never a real project secret.
+TEST_JWT_SECRET = "test-only-jwt-secret-0123456789abcdef"
+TEST_ISSUER = "https://fixture-project.supabase.invalid/auth/v1"
+
+
+def mint_token(claims: dict, *, secret: str = TEST_JWT_SECRET, header: dict | None = None) -> str:
+    """An HS256 token like Supabase Auth issues, signed with the fixture secret."""
+    import base64
+    import hashlib
+    import hmac
+
+    def part(value) -> str:
+        raw = value if isinstance(value, bytes) else json.dumps(value).encode()
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    signing = part(header or {"alg": "HS256", "typ": "JWT"}) + "." + part(claims)
+    signature = hmac.new(secret.encode(), signing.encode(), hashlib.sha256).digest()
+    return signing + "." + part(signature)
+
+
+@pytest.fixture
+def auth_env(monkeypatch):
+    monkeypatch.setenv("SWEET_SEATS_SUPABASE_JWT_SECRET", TEST_JWT_SECRET)
+    monkeypatch.setenv("SWEET_SEATS_SUPABASE_ISSUER", TEST_ISSUER)

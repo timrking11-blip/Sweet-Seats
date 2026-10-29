@@ -1,6 +1,11 @@
 # Alerts runtime v0.1: durable jobs and the alert outbox
 
-Status: **built and tested locally; not deployed.** No notification vendor is chosen,
+Status: **built and tested locally; not deployed.** The send-time trigger and follow
+re-checks, the deletion-request planning exclusion and the fresh-clock job lease rule
+are **proposed** (no Notion decision yet; [gap register](../phase-assessment.md)
+G-01–G-03, G-06). `run_job` and `tick` default to the claim time so tests can freeze it;
+the worker entry point (`main`) passes the wall clock, and any other production caller
+must too. No notification vendor is chosen,
 no scheduler is provisioned and nothing is sent to a real person. Traces to SS-DATA-0.1
 (JobRun, Alert, DeliveryAttempt, OutcomeEvent) and the Notion 02 first-party record rule.
 
@@ -23,11 +28,18 @@ scheduler) sends alerts with the browser closed:
    several workers can share the queue; each claim gets a fresh `claim_token`.
    Authorization is never carried over from the tick: immediately before **each
    subscription's** send the worker reads a fresh clock, re-projects the event's
-   permission-filtered state (`store_lookup`), and re-checks that subscription's
-   consent (unrevoked, no deletion request) in the same transaction that records the
-   send intent. Expiry, lost display permission, a stale source or withdrawn consent,
-   whether it happens after projection or between two subscriptions, suppresses the
-   sends that follow it with a reason. Each attempt per subscription is recorded.
+   permission-filtered state (`store_lookup`), re-derives the alert's trigger from that
+   projection, and re-checks that subscription's consent (unrevoked, no deletion
+   request) and the user's follow of a performer in the same transaction that records
+   the send intent. Each change below, whether it happens after projection or between
+   two subscriptions, suppresses the sends that follow it with a reason:
+   `expired` (at or after `expires_at`), `not_displayable`, `stale_source`,
+   `trigger_obsolete` (for example the show was cancelled after its announcement was
+   queued, or the on-sale time moved), `no_current_consent`, `not_following`.
+   Consent and follow rows are held `FOR SHARE` until the intent commits; a change that
+   commits after the intent is seen on the next send. No local check makes the external
+   send atomic with a concurrent change. Each attempt per subscription is recorded.
+   Planning skips users with a deletion request.
 
    Delivery state is kept per subscription (`alert_deliveries`). When email succeeds
    and push fails, the alert stays `pending`; the retry sends to push only, and email
@@ -49,8 +61,10 @@ scheduler) sends alerts with the browser closed:
 4. **Jobs** (`run_job`). Each tick's plan and dispatch run as durable jobs keyed by the
    5-minute tick, so missed ticks coalesce instead of replaying. Each claim is a new
    attempt generation. Success and failure are written only by the current generation:
-   same attempt, same lease owner, still `running`, on a live lease; a stale worker gets
-   `lease_lost` and writes nothing. A crashed run is re-claimed after its lease and a
+   same attempt, same lease owner, still `running`, on a live lease judged on a fresh
+   clock when the work returns; a stale worker gets `lease_lost` and writes nothing. A
+   refused completion does not undo what the work already committed, so work is
+   idempotent (planning: dedupe keys) or fenced on its own (dispatch: alert claims). A crashed run is re-claimed after its lease and a
    backoff while attempts remain, then dead-lettered (`lease_expired`). Failures retry
    with backoff and end as `dead` after the cap. Error records keep a fixed code, never
    a message.
@@ -104,7 +118,9 @@ not carry a total.
 - Notification vendor and channel (email / web push). Only `LogTransport`, which sends
   nothing, exists.
 - Scheduler hosting (proposed: Render cron) and runtime accounts.
-- API endpoints for follows, consent and outcomes with Supabase sign-in verification.
+- Signed-in follows, consent withdrawal and deletion requests exist locally
+  ([user API v0.1](user-api-v0.1.md), proposed). Subscription creation, outcome
+  endpoints and the deletion purge do not.
 - Persisting live provider observations in PostgreSQL. `source_event_records` still
   requires reserved `.invalid` URLs, a deliberate synthetic-only guard; lifting it is a
   separate decision before any live source.

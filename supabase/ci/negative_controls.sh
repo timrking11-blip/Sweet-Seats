@@ -161,6 +161,43 @@ run_control "provider value column added to delivery state" \
   "FAIL user tables have unreviewed columns: alert_deliveries.endpoint_address" "$USER_TEST" \
   "alter table public.alert_deliveries add column endpoint_address text;"
 
+# Consent evidence is server-written (20261029100000_user_consent_integrity.sql).
+run_control "signed-in users can create subscriptions directly" \
+  "FAIL user A created a subscription directly" "$USER_TEST" \
+  "grant insert on public.notification_subscriptions to authenticated;"
+
+run_control "signed-in users can rewrite consent evidence" \
+  "FAIL user A rewrote consent evidence" "$USER_TEST" \
+  "grant update on public.notification_subscriptions to authenticated;"
+
+run_control "revocation time accepted from the client" \
+  "FAIL a revocation time came from the client" "$USER_TEST" \
+  "drop trigger notification_subscriptions_stamp_revocation on public.notification_subscriptions;"
+
+run_control "revocation can be reversed" \
+  "FAIL user A reversed a revocation" "$USER_TEST" \
+  "" yes "s/raise exception 'revocation_is_final' using errcode = '42501';/return new;/"
+
+run_control "deletion request can be withdrawn" \
+  "FAIL user A withdrew a deletion request" "$USER_TEST" \
+  "" yes "s/  if tg_op = 'UPDATE' and old.deletion_requested_at is not null then/  if false then/"
+
+run_control "signed-in users can delete their profile and its evidence" \
+  "FAIL user A deleted their profile directly" "$USER_TEST" \
+  "grant delete on public.user_profiles to authenticated;"
+
+run_control "follows writable after a deletion request" \
+  "FAIL user A followed after a deletion request" "$USER_TEST" \
+  "drop trigger artist_follows_refuse_after_deletion_request on public.artist_follows;"
+
+run_control "outcome consent version changed without a new time" \
+  "FAIL outcome consent version changed without a new time" "$USER_TEST" \
+  "" yes "s/ or new.outcome_consent_version is distinct from old.outcome_consent_version//"
+
+run_control "outcome consent time accepted from the client" \
+  "FAIL outcome consent was back-dated" "$USER_TEST" \
+  "" yes "/new.outcome_consent_at := now();/d"
+
 # MusicBrainz collection runs.
 run_control "begin_musicbrainz_run executable by anon" \
   "FAIL anon can execute public.begin_musicbrainz_run(text, text)" "$MB_RUNS_TEST" \

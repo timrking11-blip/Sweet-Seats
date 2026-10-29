@@ -7,7 +7,8 @@ The worker runs server-side on a schedule, so alerts go out with the browser clo
 - enqueue_alerts writes them to the outbox; dedupe keys make re-planning idempotent.
 - dispatch_due claims due alerts with a lease and a fresh claim token. Immediately
   before each subscription's send it reads a fresh clock, the event's current
-  permission-filtered projection and that subscription's current consent, renders the
+  permission-filtered projection (and whether it still makes the alert's trigger due),
+  that subscription's current consent and the user's current follow, renders the
   message then (it is never stored), and records each delivery attempt. Delivery state is per
   subscription: a retry goes only to subscriptions still owed, and the alert finishes
   when every subscription is terminal. One alert failing never stops the alerts after it.
@@ -153,6 +154,33 @@ def _event_end(event: dict) -> datetime:
     return local_end.astimezone(UTC)
 
 
+def _due(event: dict, now: datetime) -> list[tuple[str, str, datetime]]:
+    """(trigger, event-level dedupe key, expiry) of every alert this projection of the
+    event makes due at now. Planning and the send-time check share it, so an alert stays
+    sendable only while the facts that planned it still hold: a cancelled show voids its
+    announcement, and a moved on-sale voids alerts keyed to the old time."""
+    if event["stale"]:
+        return []
+    end = _event_end(event)
+    if end <= now:
+        return []
+    eid = event["event_id"]
+    due = []
+    first_seen = timestamp(event["first_seen_at"])
+    if now - first_seen <= ANNOUNCE_WINDOW and event["status"] == "scheduled":
+        due.append(("announced", f"announced:{eid}", min(end, first_seen + ANNOUNCE_WINDOW)))
+    if event["status"] in STATUS_TRIGGERS:
+        due.append(("status_changed", f"status:{eid}:{event['status']}", end))
+    if event.get("onsale_at") and event["status"] in {"scheduled", "rescheduled"}:
+        onsale = timestamp(event["onsale_at"])
+        if timedelta(0) < onsale - now <= ONSALE_SOON:
+            due.append(("onsale_soon", f"onsale_soon:{eid}:{event['onsale_at']}", onsale))
+        elif timedelta(0) <= now - onsale < ONSALE_FRESH:
+            due.append(("onsale_open", f"onsale_open:{eid}:{event['onsale_at']}",
+                        min(end, onsale + ONSALE_FRESH)))
+    return due
+
+
 def plan_alerts(feed: dict, follows: Iterable[tuple[str, str]], now: datetime) -> list[AlertIntent]:
     """Alert intents for followed artists' events in the current projection.
 
@@ -164,28 +192,11 @@ def plan_alerts(feed: dict, follows: Iterable[tuple[str, str]], now: datetime) -
         followers.setdefault(str(artist_id), set()).add(str(user_id))
     intents = []
     for event in feed["events"]:
-        if event["stale"]:
-            continue
         users = set().union(*(followers.get(p["artist_id"], set()) for p in event["performers"]))
         if not users:
             continue
-        end = _event_end(event)
-        if end <= now:
-            continue
+        due = _due(event, now)
         eid = event["event_id"]
-        due = []
-        first_seen = timestamp(event["first_seen_at"])
-        if now - first_seen <= ANNOUNCE_WINDOW and event["status"] == "scheduled":
-            due.append(("announced", f"announced:{eid}", min(end, first_seen + ANNOUNCE_WINDOW)))
-        if event["status"] in STATUS_TRIGGERS:
-            due.append(("status_changed", f"status:{eid}:{event['status']}", end))
-        if event.get("onsale_at") and event["status"] in {"scheduled", "rescheduled"}:
-            onsale = timestamp(event["onsale_at"])
-            if timedelta(0) < onsale - now <= ONSALE_SOON:
-                due.append(("onsale_soon", f"onsale_soon:{eid}:{event['onsale_at']}", onsale))
-            elif timedelta(0) <= now - onsale < ONSALE_FRESH:
-                due.append(("onsale_open", f"onsale_open:{eid}:{event['onsale_at']}",
-                            min(end, onsale + ONSALE_FRESH)))
         for user in sorted(users):
             for trigger, key, expires in due:
                 intents.append(AlertIntent(user, eid, trigger, f"{key}:{user}", expires))
@@ -412,10 +423,31 @@ EventLookup = Callable[[str, datetime], dict | None]
 
 
 def _reason(alert: dict, event: dict | None, at: datetime) -> str | None:
-    """Why this alert may not be sent at time at, from the current projection."""
-    return ("expired" if at >= alert["expires_at"]
-            else "not_displayable" if event is None
-            else "stale_source" if event["stale"] else None)
+    """Why this alert may not be sent at time at, from the current projection.
+
+    trigger_obsolete: the projection no longer makes this alert due, for example the
+    show was cancelled after its announcement was queued, or the on-sale time moved.
+    """
+    if at >= alert["expires_at"]:
+        return "expired"
+    if event is None:
+        return "not_displayable"
+    if event["stale"]:
+        return "stale_source"
+    keys = {f"{key}:{alert['user_id']}" for _, key, _ in _due(event, at)}
+    return None if alert["dedupe_key"] in keys else "trigger_obsolete"
+
+
+def _following(conn, alert: dict, event: dict) -> bool:
+    """The user still follows a performer of this event.
+
+    Locks the matching follow rows (FOR SHARE) until the intent commits, like consent.
+    """
+    artists = [p["artist_id"] for p in event["performers"]]
+    return conn.execute(
+        """SELECT 1 FROM artist_follows
+           WHERE user_id = %s AND enabled AND artist_id = ANY(%s::uuid[])
+           FOR SHARE""", (alert["user_id"], artists)).fetchone() is not None
 
 
 def _consented(conn, alert: dict, subscription_id, at: datetime) -> bool:
@@ -437,13 +469,21 @@ def _dispatch_one(conn, transport: Transport, alert: dict, clock: Clock,
     """Deliver one claimed alert to the subscriptions still owed it; returns the outcome.
 
     Authorization is never carried over from the tick: immediately before each send the
-    worker reads a fresh clock, the event's current permission-filtered projection, and
-    that subscription's current consent. A change after projection or between two
-    subscriptions suppresses the sends that follow it.
+    worker reads a fresh clock, the event's current permission-filtered projection, the
+    alert's trigger against that projection, that subscription's current consent and the
+    user's current follow. A change after projection or between two subscriptions
+    suppresses the sends that follow it.
+
+    The boundary is the intent commit. Consent and follow rows are locked FOR SHARE
+    until it commits; a change that commits after the intent is seen on the next send,
+    not this one. Event facts come from the projection read just before the intent, so a
+    source change recorded after that read is likewise seen next time. No local check
+    makes the external send atomic with a concurrent change.
     """
     alert_id, event_id = alert["alert_id"], str(alert["event_id"])
     now = clock()
-    reason = _reason(alert, lookup(event_id, now), now)
+    event = lookup(event_id, now)
+    reason = _reason(alert, event, now)
     # 1. Reconcile before anything is re-sent. The provider lookup is external I/O, so it
     #    runs between transactions, never inside one.
     with conn.transaction():
@@ -459,6 +499,8 @@ def _dispatch_one(conn, transport: Transport, alert: dict, clock: Clock,
         _lock(conn, alert, now)
         for subscription_id, verdict in verdicts.items():
             _apply_reconciliation(conn, alert_id, subscription_id, verdict, transport, now)
+        if reason is None and not _following(conn, alert, event):
+            reason = "not_following"
         current = [] if reason else [row["subscription_id"] for row in conn.execute(
             """SELECT s.subscription_id
                FROM notification_subscriptions s
@@ -500,6 +542,8 @@ def _dispatch_one(conn, transport: Transport, alert: dict, clock: Clock,
             _lock(conn, alert, now)
             if reason is None and not _consented(conn, alert, sub["subscription_id"], now):
                 reason = "no_current_consent"
+            if reason is None and not _following(conn, alert, event):
+                reason = "not_following"
             if reason is not None:  # Not authorized now: this delivery is no longer owed.
                 _one(conn.execute(
                     """UPDATE alert_deliveries SET status = 'suppressed', suppressed_reason = %s,
@@ -622,7 +666,8 @@ def _close_job(conn, job: dict, now: datetime, **fields) -> bool:
 
 
 def run_job(conn, job_type: str, logical_key: str, work: Callable[[], dict], now: datetime,
-            worker: str, max_attempts: int = MAX_ATTEMPTS) -> dict | None:
+            worker: str, max_attempts: int = MAX_ATTEMPTS, *,
+            clock: Clock | None = None) -> dict | None:
     """Run work once per (job_type, logical_key). Returns None if not claimable now.
 
     Claimable: new; failed and due for retry; or running with an expired lease, after a
@@ -631,8 +676,14 @@ def run_job(conn, job_type: str, logical_key: str, work: Callable[[], dict], now
 
     Each claim is a new attempt generation. Only the current generation on a live lease
     can record success or failure; an older one gets {"status": "lease_lost"} and writes
-    nothing. Errors keep a fixed code (the exception type), never a message that could
-    carry provider or user data.
+    nothing. The lease is judged on a fresh clock (clock, default the claim time) when
+    the work returns, so a worker that outlived its lease is refused even if nobody has
+    taken over yet; the job is then re-claimed after its backoff. Errors keep a fixed
+    code (the exception type), never a message that could carry provider or user data.
+
+    The fence covers the job row only. Side effects the work committed before it returned
+    are not undone by a refused completion, so work must be idempotent (planning: dedupe
+    keys) or fenced on its own (dispatch: each alert's claim token).
     """
     with conn.transaction():
         conn.execute(
@@ -658,17 +709,19 @@ def run_job(conn, job_type: str, logical_key: str, work: Callable[[], dict], now
             (job_type, logical_key, max_attempts, worker, now + LEASE, now, now)).fetchone()
     if job is None:
         return None
+    clock = clock or (lambda: now)
     try:
         result = work()
     except Exception as exc:  # noqa: BLE001 - recorded as a fixed code, then retried.
         # A lost connection fails again here and propagates: never recorded as success.
         dead = job["attempt"] >= job["max_attempts"]
         status = "dead" if dead else "failed"
-        if not _close_job(conn, job, now, status=status, last_error_code=type(exc).__name__,
-                          run_after=now + _backoff(job["attempt"])):
+        at = clock()
+        if not _close_job(conn, job, at, status=status, last_error_code=type(exc).__name__,
+                          run_after=at + _backoff(job["attempt"])):
             return {"status": "lease_lost"}
         return {"status": status, "error_code": type(exc).__name__}
-    if not _close_job(conn, job, now, status="succeeded", last_error_code=None):
+    if not _close_job(conn, job, clock(), status="succeeded", last_error_code=None):
         return {"status": "lease_lost"}
     return {"status": "succeeded", **result}
 
@@ -692,16 +745,20 @@ def tick(store, transport: Transport, now: datetime, worker: str,
         conn.autocommit = True
 
         def plan():
+            # A deletion request stops new alerts at once, not only their delivery.
             follows = conn.execute(
-                "SELECT user_id, artist_id FROM artist_follows WHERE enabled").fetchall()
+                """SELECT f.user_id, f.artist_id FROM artist_follows f
+                   JOIN user_profiles p USING (user_id)
+                   WHERE f.enabled AND p.deletion_requested_at IS NULL""").fetchall()
             intents = plan_alerts(feed, [(r["user_id"], r["artist_id"]) for r in follows], now)
             with conn.transaction():
                 return {"planned": len(intents), "created": enqueue_alerts(conn, intents, now)}
 
-        planned = run_job(conn, "plan_alerts", key, plan, now, worker)
+        planned = run_job(conn, "plan_alerts", key, plan, now, worker, clock=clock)
         dispatched = run_job(conn, "dispatch_alerts", key,
                              lambda: dispatch_due(conn, transport, feed, now, worker, clock=clock,
-                                                  lookup=store_lookup(store)), now, worker)
+                                                  lookup=store_lookup(store)),
+                             now, worker, clock=clock)
     return {"tick": key, "plan": planned, "dispatch": dispatched}
 
 

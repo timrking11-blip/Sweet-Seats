@@ -65,14 +65,21 @@ begin
       reset role;
       raise exception 'FAIL user A reads user B''s % rows', tbl;
     end if;
-    execute format('update public.%I set user_id = user_id where user_id = %L', tbl, user_b);
-    get diagnostics n = row_count;
+    -- Denied by RLS (0 rows) or, where the grant is narrower, by privilege.
+    begin
+      execute format('update public.%I set user_id = user_id where user_id = %L', tbl, user_b);
+      get diagnostics n = row_count;
+    exception when insufficient_privilege then n := 0;
+    end;
     if n <> 0 then
       reset role;
       raise exception 'FAIL user A updated user B''s % rows', tbl;
     end if;
-    execute format('delete from public.%I where user_id = %L', tbl, user_b);
-    get diagnostics n = row_count;
+    begin
+      execute format('delete from public.%I where user_id = %L', tbl, user_b);
+      get diagnostics n = row_count;
+    exception when insufficient_privilege then n := 0;
+    end;
     if n <> 0 then
       reset role;
       raise exception 'FAIL user A deleted user B''s % rows', tbl;
@@ -228,6 +235,114 @@ begin
   exception when check_violation then null;
   end;
   raise notice 'ok - consent checks hold';
+end;
+$$;
+
+-- Consent evidence is written by the server. A signed-in user may revoke their own
+-- subscription (stamped with the database time, one way) and nothing else: no direct
+-- subscription with an arbitrary endpoint reference, no rewritten or back-dated consent,
+-- no reversed revocation, and no deleting the evidence. Outcome consent and deletion
+-- requests are stamped with the database time; a deletion request is final.
+do $$
+declare
+  user_a constant text := '00000000-0000-4000-8000-00000000000a';
+  stamped timestamptz;
+begin
+  perform set_config('request.jwt.claim.sub', user_a, true);
+  set local role authenticated;
+  begin
+    insert into public.notification_subscriptions (user_id, channel, endpoint_ref, consent_version, consent_at)
+    values (user_a::uuid, 'web_push', 'secret://b', 'c1', now());
+    reset role;
+    raise exception 'FAIL user A created a subscription directly';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.notification_subscriptions set consent_at = now() - interval '1 year',
+      consent_version = 'forged' where user_id = user_a::uuid;
+    reset role;
+    raise exception 'FAIL user A rewrote consent evidence';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.notification_subscriptions set endpoint_ref = 'secret://b' where user_id = user_a::uuid;
+    reset role;
+    raise exception 'FAIL user A redirected a subscription endpoint';
+  exception when insufficient_privilege then null;
+  end;
+  -- A client-chosen time (here in the future, which the consent check alone allows).
+  update public.notification_subscriptions set revoked_at = now() + interval '1 day'
+  where user_id = user_a::uuid returning revoked_at into stamped;
+  if stamped is distinct from now() then
+    reset role;
+    raise exception 'FAIL a revocation time came from the client: %', stamped;
+  end if;
+  begin
+    update public.notification_subscriptions set revoked_at = null where user_id = user_a::uuid;
+    reset role;
+    raise exception 'FAIL user A reversed a revocation';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    delete from public.notification_subscriptions where user_id = user_a::uuid;
+    reset role;
+    raise exception 'FAIL user A deleted consent evidence';
+  exception when insufficient_privilege then null;
+  end;
+
+  update public.user_profiles set outcome_consent_version = 'o2',
+    outcome_consent_at = now() - interval '1 year'
+  where user_id = user_a::uuid returning outcome_consent_at into stamped;
+  if stamped is distinct from now() then
+    reset role;
+    raise exception 'FAIL outcome consent was back-dated to %', stamped;
+  end if;
+  -- A new outcome consent version is consent at a new time, never under the old one.
+  reset role;
+  update public.user_profiles set outcome_consent_at = now() - interval '1 day'
+  where user_id = user_a::uuid;
+  set local role authenticated;
+  update public.user_profiles set outcome_consent_version = 'o3'
+  where user_id = user_a::uuid returning outcome_consent_at into stamped;
+  if stamped is distinct from now() then
+    reset role;
+    raise exception 'FAIL outcome consent version changed without a new time: %', stamped;
+  end if;
+  -- Deleting the profile row would cascade away consent and delivery evidence and allow
+  -- re-creating a profile without the deletion request. Erasure is a server purge.
+  begin
+    delete from public.user_profiles where user_id = user_a::uuid;
+    reset role;
+    raise exception 'FAIL user A deleted their profile directly';
+  exception when insufficient_privilege then null;
+  end;
+  update public.user_profiles set deletion_requested_at = now() - interval '1 year'
+  where user_id = user_a::uuid returning deletion_requested_at into stamped;
+  if stamped is distinct from now() then
+    reset role;
+    raise exception 'FAIL a deletion request was back-dated to %', stamped;
+  end if;
+  begin
+    update public.user_profiles set deletion_requested_at = null where user_id = user_a::uuid;
+    reset role;
+    raise exception 'FAIL user A withdrew a deletion request';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    update public.user_profiles set timezone = 'Europe/London' where user_id = user_a::uuid;
+    reset role;
+    raise exception 'FAIL user A changed their profile after a deletion request';
+  exception when insufficient_privilege then null;
+  end;
+  begin
+    execute format('insert into public.artist_follows (user_id, artist_id) values (%L, %L)',
+                   user_a, current_setting('ss_test.unfollowed_id'));
+    reset role;
+    raise exception 'FAIL user A followed after a deletion request';
+  exception when insufficient_privilege then null;
+  end;
+  reset role;
+  raise notice 'ok - consent evidence and deletion requests are server-stamped and one-way';
 end;
 $$;
 
