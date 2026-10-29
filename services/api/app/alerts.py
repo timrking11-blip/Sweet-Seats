@@ -5,9 +5,10 @@ The worker runs server-side on a schedule, so alerts go out with the browser clo
 
 - plan_alerts decides which alerts are due from the permission-filtered feed only.
 - enqueue_alerts writes them to the outbox; dedupe keys make re-planning idempotent.
-- dispatch_due claims due alerts with a lease and a fresh claim token, re-checks expiry,
-  display permission, freshness and current consent at send time, renders the message
-  then (it is never stored), and records each delivery attempt. Delivery state is per
+- dispatch_due claims due alerts with a lease and a fresh claim token. Immediately
+  before each subscription's send it reads a fresh clock, the event's current
+  permission-filtered projection and that subscription's current consent, renders the
+  message then (it is never stored), and records each delivery attempt. Delivery state is per
   subscription: a retry goes only to subscriptions still owed, and the alert finishes
   when every subscription is terminal. One alert failing never stops the alerts after it.
 - run_job wraps a unit of work in a durable job row with a lease, retries and a
@@ -404,13 +405,45 @@ def _send(transport: Transport, sub: dict, message: dict) -> tuple[str, str | No
     return "sent", provider_id, None, False
 
 
-def _dispatch_one(conn, transport: Transport, alert: dict, event: dict | None,
-                  now: datetime) -> str:
-    """Deliver one claimed alert to the subscriptions still owed it; returns the outcome."""
-    alert_id = alert["alert_id"]
-    reason = ("expired" if now >= alert["expires_at"]
-              else "not_displayable" if event is None
-              else "stale_source" if event["stale"] else None)
+Clock = Callable[[], datetime]
+# The current permission-filtered projection of one event at a time, or None when it is
+# no longer displayable. Called immediately before every send.
+EventLookup = Callable[[str, datetime], dict | None]
+
+
+def _reason(alert: dict, event: dict | None, at: datetime) -> str | None:
+    """Why this alert may not be sent at time at, from the current projection."""
+    return ("expired" if at >= alert["expires_at"]
+            else "not_displayable" if event is None
+            else "stale_source" if event["stale"] else None)
+
+
+def _consented(conn, alert: dict, subscription_id, at: datetime) -> bool:
+    """That subscription's consent is current at time at, and no deletion is requested.
+
+    Locks the subscription row (FOR SHARE) until the intent commits, so a revocation
+    either lands first and is seen here, or waits for the intent and is seen next time.
+    """
+    return conn.execute(
+        """SELECT 1 FROM notification_subscriptions s
+           JOIN user_profiles p ON p.user_id = s.user_id
+           WHERE s.subscription_id = %s AND s.user_id = %s AND s.revoked_at IS NULL
+             AND s.consent_at <= %s AND p.deletion_requested_at IS NULL
+           FOR SHARE OF s""", (subscription_id, alert["user_id"], at)).fetchone() is not None
+
+
+def _dispatch_one(conn, transport: Transport, alert: dict, clock: Clock,
+                  lookup: EventLookup) -> str:
+    """Deliver one claimed alert to the subscriptions still owed it; returns the outcome.
+
+    Authorization is never carried over from the tick: immediately before each send the
+    worker reads a fresh clock, the event's current permission-filtered projection, and
+    that subscription's current consent. A change after projection or between two
+    subscriptions suppresses the sends that follow it.
+    """
+    alert_id, event_id = alert["alert_id"], str(alert["event_id"])
+    now = clock()
+    reason = _reason(alert, lookup(event_id, now), now)
     # 1. Reconcile before anything is re-sent. The provider lookup is external I/O, so it
     #    runs between transactions, never inside one.
     with conn.transaction():
@@ -421,6 +454,7 @@ def _dispatch_one(conn, transport: Transport, alert: dict, event: dict | None,
                WHERE d.alert_id = %s AND d.status = 'uncertain'""", (alert_id,)).fetchall()
     verdicts = {row["subscription_id"]: _reconcile(transport, row) for row in uncertain}
     # 2. Apply the verdicts, re-check consent, and decide who is owed this round.
+    now = clock()
     with conn.transaction():
         _lock(conn, alert, now)
         for subscription_id, verdict in verdicts.items():
@@ -443,26 +477,36 @@ def _dispatch_one(conn, transport: Transport, alert: dict, event: dict | None,
                WHERE alert_id = %s AND status = 'pending' AND NOT subscription_id = ANY(%s::uuid[])""",
             (reason or "no_current_consent", now, alert_id, current))
         owed = _owed(conn, alert_id)
-    if not owed:
-        with conn.transaction():
-            _lock(conn, alert, now)
-            return _settle(conn, alert, now, transport, reason=reason)
-    try:
-        message = render(alert, event)
-    except Exception:  # noqa: BLE001 - permanent: the same projection renders the same way.
-        with conn.transaction():
-            _lock(conn, alert, now)
-            conn.execute(
-                """UPDATE alert_deliveries SET status = 'failed', last_error_code = 'render_error',
-                          updated_at = %s
-                   WHERE alert_id = %s AND status = 'pending'""", (now, alert_id))
-            return _settle(conn, alert, now, transport, error_code="render_error")
-    # 3. One delivery at a time: commit the intent, send outside any transaction, then
-    #    commit the outcome. A crash or failed commit in between leaves a 'sending' row
-    #    that recovery turns into 'uncertain'.
+    # 3. One delivery at a time: re-authorize and commit the intent, send outside any
+    #    transaction, then commit the outcome. A crash or failed commit in between leaves
+    #    a 'sending' row that recovery turns into 'uncertain'.
     for sub in owed:
+        now = clock()
+        event = lookup(event_id, now)
+        reason = _reason(alert, event, now)
+        message = None
+        if reason is None:
+            try:
+                message = render(alert, event)
+            except Exception:  # noqa: BLE001 - permanent: the same projection renders the same way.
+                with conn.transaction():
+                    _lock(conn, alert, now)
+                    conn.execute(
+                        """UPDATE alert_deliveries SET status = 'failed',
+                                  last_error_code = 'render_error', updated_at = %s
+                           WHERE alert_id = %s AND status = 'pending'""", (now, alert_id))
+                    return _settle(conn, alert, now, transport, error_code="render_error")
         with conn.transaction():
             _lock(conn, alert, now)
+            if reason is None and not _consented(conn, alert, sub["subscription_id"], now):
+                reason = "no_current_consent"
+            if reason is not None:  # Not authorized now: this delivery is no longer owed.
+                _one(conn.execute(
+                    """UPDATE alert_deliveries SET status = 'suppressed', suppressed_reason = %s,
+                              updated_at = %s
+                       WHERE alert_id = %s AND subscription_id = %s AND status = 'pending'""",
+                    (reason, now, alert_id, sub["subscription_id"])))
+                continue
             row = conn.execute(
                 """UPDATE alert_deliveries SET status = 'sending', attempts = attempts + 1,
                           updated_at = %s
@@ -477,6 +521,7 @@ def _dispatch_one(conn, transport: Transport, alert: dict, event: dict | None,
                    VALUES (%s, %s, %s, 'sending', %s)""",
                 (alert_id, sub["subscription_id"], attempt_no, now))
         status, provider_id, code, permanent = _send(transport, sub, message)
+        now = clock()
         with conn.transaction():
             _lock(conn, alert, now)
             _one(conn.execute(
@@ -493,6 +538,7 @@ def _dispatch_one(conn, transport: Transport, alert: dict, event: dict | None,
                    WHERE alert_id = %s AND subscription_id = %s AND status = 'sending'""",
                 (status, code, now if status == "sent" else None, now,
                  alert_id, sub["subscription_id"])))
+    now = clock()
     with conn.transaction():
         _lock(conn, alert, now)
         return _settle(conn, alert, now, transport, reason=reason)
@@ -503,9 +549,28 @@ def _connection_lost(conn, exc: Exception) -> bool:
             or conn.closed or bool(getattr(conn, "broken", False)))
 
 
-def dispatch_due(conn, transport: Transport, feed: dict, now: datetime, worker: str,
-                 limit: int = 20) -> dict:
+def feed_lookup(feed: dict) -> EventLookup:
+    """An EventLookup over one fixed projection. For tests; a live worker re-projects."""
+    events = {e["event_id"]: e for e in feed["events"]}
+    return lambda event_id, at: events.get(event_id)
+
+
+def store_lookup(store) -> EventLookup:
+    """Re-project the store's permission-filtered feed at the time of each send."""
+    def lookup(event_id: str, at: datetime) -> dict | None:
+        return next((e for e in store.feed(at)["events"] if e["event_id"] == event_id), None)
+    return lookup
+
+
+def dispatch_due(conn, transport: Transport, feed: dict | None, now: datetime, worker: str,
+                 limit: int = 20, *, clock: Clock | None = None,
+                 lookup: EventLookup | None = None) -> dict:
     """Send due alerts, isolating each one.
+
+    now is when the round starts (reclaiming and claiming). clock gives the time for each
+    later step and lookup the event's current projection; both are read again before
+    every send. Without them the round uses now and the given feed throughout, which is
+    only right for a test with a frozen projection.
 
     Delivery state is kept per subscription (alert_deliveries). A retry sends only to
     subscriptions still owed, so one channel failing never re-sends another's message.
@@ -518,12 +583,13 @@ def dispatch_due(conn, transport: Transport, feed: dict, now: datetime, worker: 
     it still run. A lost database connection is not isolated: it ends the batch with the
     error, and the leases it held expire into recovery.
     """
+    clock = clock or (lambda: now)
+    lookup = lookup or feed_lookup(feed)
     reclaim_expired_leases(conn, now, transport)
-    events = {e["event_id"]: e for e in feed["events"]}
     counts = dict.fromkeys(OUTCOMES, 0)
     for alert in claim_due(conn, now, worker, limit):
         try:
-            outcome = _dispatch_one(conn, transport, alert, events.get(str(alert["event_id"])), now)
+            outcome = _dispatch_one(conn, transport, alert, clock, lookup)
         except LeaseLost:
             outcome = "lease_lost"
         except Exception as exc:
@@ -531,9 +597,10 @@ def dispatch_due(conn, transport: Transport, feed: dict, now: datetime, worker: 
                 raise
             # The failing transaction has rolled back; record recovery in a fresh one.
             try:
+                at = clock()
                 with conn.transaction():
-                    _lock(conn, alert, now)
-                    outcome = _recover(conn, alert, now, transport, "dispatch_error")
+                    _lock(conn, alert, at)
+                    outcome = _recover(conn, alert, at, transport, "dispatch_error")
             except LeaseLost:
                 outcome = "lease_lost"
         counts[outcome] += 1
@@ -541,15 +608,17 @@ def dispatch_due(conn, transport: Transport, feed: dict, now: datetime, worker: 
 
 
 def _close_job(conn, job: dict, now: datetime, **fields) -> bool:
-    """Write a job's result; only its current attempt generation on a live lease can."""
+    """Write a job's result. Only the claim that is still current can: the same attempt
+    generation and lease owner, still running, on an unexpired lease."""
     sets = ", ".join(f"{name} = %s" for name in fields)
     with conn.transaction():
         return conn.execute(
             f"""UPDATE job_runs SET {sets}, lease_owner = NULL, lease_expires_at = NULL,
                        finished_at = %s
-                WHERE job_run_id = %s AND attempt = %s AND status = 'running'
-                  AND lease_expires_at > %s""",  # Column names are constants.
-            (*fields.values(), now, job["job_run_id"], job["attempt"], now)).rowcount == 1
+                WHERE job_run_id = %s AND attempt = %s AND lease_owner = %s
+                  AND status = 'running' AND lease_expires_at > %s""",  # Constant names.
+            (*fields.values(), now, job["job_run_id"], job["attempt"], job["lease_owner"],
+             now)).rowcount == 1
 
 
 def run_job(conn, job_type: str, logical_key: str, work: Callable[[], dict], now: datetime,
@@ -610,8 +679,13 @@ def tick_key(now: datetime) -> str:
     return floored.strftime("%Y-%m-%dT%H:%MZ")
 
 
-def tick(store, transport: Transport, now: datetime, worker: str) -> dict:
-    """One scheduler tick: plan alerts, then dispatch. Each is a durable job."""
+def tick(store, transport: Transport, now: datetime, worker: str,
+         clock: Clock | None = None) -> dict:
+    """One scheduler tick: plan alerts, then dispatch. Each is a durable job.
+
+    Planning uses the tick's projection. Dispatch re-reads the clock (clock, default the
+    tick time) and re-projects the store before every send.
+    """
     key = tick_key(now)
     feed = store.feed(now)
     with store._connect() as conn:
@@ -626,7 +700,8 @@ def tick(store, transport: Transport, now: datetime, worker: str) -> dict:
 
         planned = run_job(conn, "plan_alerts", key, plan, now, worker)
         dispatched = run_job(conn, "dispatch_alerts", key,
-                             lambda: dispatch_due(conn, transport, feed, now, worker), now, worker)
+                             lambda: dispatch_due(conn, transport, feed, now, worker, clock=clock,
+                                                  lookup=store_lookup(store)), now, worker)
     return {"tick": key, "plan": planned, "dispatch": dispatched}
 
 
@@ -639,7 +714,8 @@ def main() -> None:
     dsn = os.environ.get("SWEET_SEATS_LOCAL_DATABASE_URL")
     if not dsn:
         parser.exit(1, "SWEET_SEATS_LOCAL_DATABASE_URL is required; no hosted database is used.\n")
-    result = tick(PostgresStore(dsn), LogTransport(), datetime.now(UTC), "local-" + uuid4().hex[:8])
+    result = tick(PostgresStore(dsn), LogTransport(), datetime.now(UTC), "local-" + uuid4().hex[:8],
+                  clock=lambda: datetime.now(UTC))
     print(json.dumps(result, default=str))
 
 

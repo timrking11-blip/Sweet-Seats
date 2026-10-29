@@ -1,12 +1,17 @@
 """Official calendar adapter, the provider ingestion path and a cross-source lead-time run."""
 
+import functools
 import json
+import socket
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid5
 
 import pytest
 
+from app import official_feeds
 from app.discovery import (
     NAMESPACE,
     USES,
@@ -322,3 +327,239 @@ def test_official_calendar_beats_ticketmaster_in_the_lead_time_report():
     assert listing_api["median_lag_minutes"] == (TM_SEEN - OFFICIAL_SEEN).total_seconds() / 60
     # The latest observation (Ticketmaster) carries the public on-sale time.
     assert shared[0]["onsale_at"] == "2026-09-01T14:00:00Z"
+
+
+# --- Reliability regressions (PR #23 review) ---------------------------------------
+
+
+def calendar(*events: str) -> str:
+    return "BEGIN:VCALENDAR\r\nVERSION:2.0\r\n" + "".join(
+        "BEGIN:VEVENT\r\n" + body.strip().replace("\n", "\r\n") + "\r\nEND:VEVENT\r\n"
+        for body in events) + "END:VCALENDAR\r\n"
+
+
+SINGLE = """UID:single@hall.example.invalid
+DTSTART;TZID=America/New_York:20261113T193000
+SUMMARY:Glass Harbor"""
+
+
+@pytest.mark.parametrize("series", [
+    ["UID:s@x\nDTSTART:20261113T230000Z\nSUMMARY:Weekly\nRRULE:FREQ=WEEKLY;COUNT=4"],
+    ["UID:s@x\nDTSTART:20261113T230000Z\nSUMMARY:Pair\nRDATE:20261120T230000Z"],
+    ["UID:s@x\nDTSTART:20261113T230000Z\nSUMMARY:Gap\nEXDATE:20261120T230000Z"],
+    ["UID:s@x\nDTSTART:20261113T230000Z\nSUMMARY:Old\nEXRULE:FREQ=MONTHLY"],
+    # A series master and an overridden instance under the same UID.
+    ["UID:s@x\nDTSTART:20261113T230000Z\nSUMMARY:Weekly\nRRULE:FREQ=WEEKLY",
+     "UID:s@x\nRECURRENCE-ID:20261120T230000Z\nDTSTART:20261121T000000Z\nSUMMARY:Moved"],
+    # An override alone, whose master is elsewhere: still part of a series.
+    ["UID:s@x\nRECURRENCE-ID:20261120T230000Z\nDTSTART:20261121T000000Z\nSUMMARY:Moved"],
+    # The recurrence property only on a later member of the group.
+    ["UID:s@x\nDTSTART:20261113T230000Z\nSUMMARY:First",
+     "UID:s@x\nDTSTART:20261120T230000Z\nSUMMARY:Second\nRDATE:20261127T230000Z"],
+])
+def test_recurring_series_are_skipped_whole_with_one_reason(series):
+    mapped = map_feed(calendar(SINGLE, *series), FEED, OFFICIAL_SEEN)
+    assert [r["vendor_event_id"] for r in mapped["records"]] == ["single@hall.example.invalid"]
+    assert mapped["skipped"] == [{"vendor_event_id": "s@x", "error_code": "unsupported_recurrence"}]
+
+
+def test_a_repeated_uid_is_skipped_rather_than_duplicated():
+    text = calendar(SINGLE, "UID:d@x\nDTSTART:20261113T230000Z\nSUMMARY:One",
+                    "UID:d@x\nDTSTART:20261114T230000Z\nSUMMARY:Two")
+    mapped = map_feed(text, FEED, OFFICIAL_SEEN)
+    ids = [r["vendor_event_id"] for r in mapped["records"]]
+    assert ids == ["single@hall.example.invalid"] and len(ids) == len(set(ids))
+    assert mapped["skipped"] == [{"vendor_event_id": "d@x", "error_code": "duplicate_uid"}]
+
+
+@pytest.mark.parametrize("dtstart,code", [
+    ("DTSTART;TZID=Eastern Standard Time:20261113T193000", "unsupported_timezone"),
+    ("DTSTART;TZID=../../etc/passwd:20261113T193000", "unsupported_timezone"),
+    ("DTSTART:20261113T193000", "floating_start_time"),
+    ("DTSTART;VALUE=DATE:20261113T193000", "invalid_start"),
+])
+def test_start_times_need_a_known_zone(dtstart, code):
+    mapped = map_feed(calendar(f"UID:t@x\n{dtstart}\nSUMMARY:Show"), FEED, OFFICIAL_SEEN)
+    assert mapped["skipped"] == [{"vendor_event_id": "t@x", "error_code": code}]
+
+
+class NoNetwork:
+    """Resolver and transport that record any use; a valid refusal makes none."""
+
+    def __init__(self):
+        self.calls = []
+
+    def resolve(self, host, port):
+        self.calls.append(("dns", host))
+        return [PUBLIC_IP]
+
+    def transport(self, *args):
+        self.calls.append(("http", args[0]))
+        return 200, {}, VENUE_ICS.encode()
+
+
+@pytest.mark.parametrize("change,code", [
+    ({"kind": "festival"}, "unsupported_feed_kind"),
+    ({"vendor_venue_id": " "}, "missing_feed_identity"),
+    ({"vendor_venue_id": None}, "missing_feed_identity"),
+    ({"timezone": "Eastern Standard Time"}, "invalid_timezone"),
+    ({"timezone": "../../etc/passwd"}, "invalid_timezone"),
+    ({"url": "http://hall.example.invalid/calendar.ics"}, "invalid_provider_url"),
+    ({"url": "https://hall.example.invalid/cal endar.ics"}, "invalid_provider_url"),
+    ({"url": "https://hall.example.invalid/cal\r\nX-Injected: 1"}, "invalid_provider_url"),
+    ({"url": "https://hall.example.invalid\\@other.example.invalid/"}, "invalid_provider_url"),
+    ({"url": "https://@hall.example.invalid/calendar.ics"}, "invalid_provider_url"),
+    ({"url": "https://hall.example.invalid/kalender-ä.ics"}, "invalid_provider_url"),
+    ({"url": None}, "invalid_provider_url"),
+])
+def test_invalid_configuration_returns_a_fixed_outcome_before_any_request(change, code):
+    _, hall = sources()
+    net = NoNetwork()
+    result = fetch_feed(hall, {**FEED, **change}, NOW, env=ENABLED, transport=net.transport,
+                        resolver=net.resolve)
+    assert (result["status"], result["error_code"], result["network_calls"]) == (
+        "skipped", code, 0)
+    assert net.calls == []
+
+
+@pytest.mark.parametrize("answers", [["::10.0.0.5"], ["::8.8.8.8"], [PUBLIC_IP, "::127.0.0.1"]])
+def test_ipv4_compatible_ipv6_answers_cause_no_request(answers):
+    _, hall = sources()
+    transport = Recorder((200, {}, VENUE_ICS.encode()))
+    result = fetch_feed(hall, FEED, NOW, env=ENABLED, transport=transport,
+                        resolver=lambda host, port: answers)
+    assert (result["error_code"], transport.requests) == ("non_public_address", [])
+
+
+def test_malformed_validators_are_never_sent_or_kept():
+    _, hall = sources()
+    seen = {}
+
+    def transport(url, address, headers, timeout):
+        seen.update(headers)
+        return 304, {"ETag": "bad value"}, b""
+
+    result = fetch_feed(hall, FEED, NOW, validators={"etag": '"v1"\r\nX-Injected: 1'},
+                        transport=transport, resolver=public_dns, env=ENABLED)
+    assert seen == {} and result["status"] == "not_modified"
+    assert result["validators"] == {"etag": '"v1"\r\nX-Injected: 1'}  # Unchanged, unsent.
+
+
+# Deadline tests use real time with small budgets. Each asserts the fetch ends within
+# the budget plus a margin for thread scheduling.
+BUDGET = 0.6
+MARGIN = 0.6
+
+
+def timed_fetch(**kwargs):
+    _, hall = sources()
+    started = time.monotonic()
+    result = fetch_feed(hall, FEED, NOW, env=ENABLED, timeout=BUDGET, **kwargs)
+    return result, time.monotonic() - started
+
+
+def test_a_slow_resolver_is_bounded_by_the_total_deadline():
+    def slow_dns(host, port):
+        time.sleep(BUDGET * 4)
+        return [PUBLIC_IP]
+
+    transport = Recorder((200, {}, VENUE_ICS.encode()))
+    result, elapsed = timed_fetch(transport=transport, resolver=slow_dns)
+    assert (result["error_code"], transport.requests) == ("deadline_exceeded", [])
+    assert elapsed < BUDGET + MARGIN
+
+
+def test_a_redirect_chain_shares_one_deadline():
+    # Each hop alone is well inside the budget; together they are not.
+    hop = BUDGET / 2.5
+
+    def slow(url, address, headers, timeout):
+        time.sleep(hop)
+        return redirect(f"/hop-{time.monotonic_ns()}.ics")
+
+    result, elapsed = timed_fetch(transport=slow, resolver=public_dns)
+    assert result["error_code"] == "deadline_exceeded"
+    assert 1 < result["network_calls"] <= MAX_REDIRECTS
+    assert elapsed < BUDGET + MARGIN
+
+
+class DripServer:
+    """A local TCP server that answers one connection slowly, a byte at a time."""
+
+    def __init__(self, head: bytes, body: bytes = b"", interval: float = 0.05):
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(1)
+        self.port = self.sock.getsockname()[1]
+        self.payload, self.interval = head + body, interval
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    def serve(self):
+        try:
+            client, _ = self.sock.accept()
+            client.settimeout(5)
+            if self.payload:
+                client.recv(65536)  # The request.
+            for byte in self.payload:
+                client.sendall(bytes([byte]))
+                time.sleep(self.interval)
+            time.sleep(5)  # A silent server never answers (for the TLS case).
+            client.close()
+        except OSError:
+            pass
+
+    def close(self):
+        self.sock.close()
+
+
+def plain_connection(port):
+    """The pinned connection without TLS, so a test can speak HTTP to a local drip
+    server. Production code always uses the TLS connection."""
+
+    class Plain(official_feeds._PinnedHTTPSConnection):
+        def __init__(self, host, address, timeout):
+            super().__init__(host, address, timeout, port=port)
+
+        def connect(self):
+            self._raw = socket.create_connection((self._address, self.port), self.remaining())
+            self._raw.settimeout(self.remaining())
+            self.sock = self._raw
+
+    return Plain
+
+
+@pytest.mark.parametrize("head,body", [
+    # The body drips: every byte is inside a per-read timeout, the whole is not.
+    (b"HTTP/1.1 200 OK\r\nContent-Length: 400\r\n\r\n", b"x" * 400),
+    # The response headers drip.
+    (b"HTTP/1.1 200 OK\r\n" + b"X-Pad: " + b"y" * 400 + b"\r\n\r\n", b""),
+])
+def test_a_slow_drip_response_is_bounded_by_the_total_deadline(head, body):
+    server = DripServer(head, body)
+    try:
+        transport = functools.partial(official_feeds._pinned_transport,
+                                      connection=plain_connection(server.port))
+        result, elapsed = timed_fetch(
+            transport=lambda url, address, headers, timeout: transport(
+                url, "127.0.0.1", headers, timeout),
+            resolver=public_dns)
+    finally:
+        server.close()
+    assert result["error_code"] == "deadline_exceeded"
+    assert elapsed < BUDGET + MARGIN
+
+
+def test_a_stalled_tls_handshake_is_bounded_by_the_total_deadline():
+    server = DripServer(b"")  # Accepts, then says nothing: the handshake never completes.
+    try:
+        def tls_to_local(url, address, headers, timeout):
+            connection = functools.partial(official_feeds._PinnedHTTPSConnection,
+                                           port=server.port)
+            return official_feeds._pinned_transport(url, "127.0.0.1", headers, timeout,
+                                                    connection=connection)
+
+        result, elapsed = timed_fetch(transport=tls_to_local, resolver=public_dns)
+    finally:
+        server.close()
+    assert result["error_code"] == "deadline_exceeded"
+    assert elapsed < BUDGET + MARGIN

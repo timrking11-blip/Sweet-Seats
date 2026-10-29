@@ -1,11 +1,15 @@
 """Durable jobs and the alert outbox against disposable PostgreSQL."""
 
+import copy
 import os
 from datetime import timedelta
 from uuid import uuid4
 
+import psycopg
 import pytest
+from psycopg.rows import dict_row
 
+from app import alerts as alerts_module
 from app.alerts import (
     LEASE,
     MAX_ATTEMPTS,
@@ -15,8 +19,10 @@ from app.alerts import (
     claim_due,
     dispatch_due,
     enqueue_alerts,
+    feed_lookup,
     plan_alerts,
     run_job,
+    store_lookup,
     tick,
 )
 from app.discovery import timestamp
@@ -309,3 +315,405 @@ def test_jobs_retry_then_dead_letter_and_never_rerun_success(pg_store):
         assert (job["status"], job["attempt"], job["last_error_code"]) == ("dead", 2, "ValueError")
         assert run_job(conn, "collect", "k2", lambda: {"n": 1}, NOW, "w")["status"] == "succeeded"
         assert run_job(conn, "collect", "k2", lambda: {"n": 2}, NOW + timedelta(days=1), "w") is None
+
+
+# --- Reliability regressions (PR #23 review) ---------------------------------------
+
+
+class BlindTransport(Transport):
+    """A provider without idempotency keys or lookups: an unanswered send stays unknown."""
+
+    def __init__(self, on_send=None):
+        self.keys: list[str] = []
+        self.on_send = on_send
+
+    def send(self, channel, endpoint_ref, message, idempotency_key):
+        self.keys.append(idempotency_key)  # The provider has accepted the message...
+        if self.on_send:
+            self.on_send()  # ...and then something goes wrong on our side.
+        return "blind-" + idempotency_key
+
+
+class LookupProvider(LogTransport):
+    """Answers lookups but does not de-duplicate sends, so only reconciling is safe."""
+
+    idempotent = False
+
+
+def queue_one(store, feed, artists):
+    with connect(store) as setup:
+        user = add_user(setup, artists[:1])
+        enqueue_alerts(setup, plan_alerts(feed, [(user, artists[0])], NOW)[:1], NOW)
+
+
+def one_alert_per_event(pg_store):
+    """A user following every headliner, with one queued alert for each of two events.
+    The first alert (poison) is ahead of the second (healthy) in the queue."""
+    store, feed, artists = seeded(pg_store)
+    conn = connect(store)
+    user = add_user(conn, artists)
+    by_event = {}
+    for intent in plan_alerts(feed, [(user, a) for a in artists], NOW):
+        by_event.setdefault(intent.event_id, intent)
+    assert len(by_event) >= 2
+    enqueue_alerts(conn, list(by_event.values())[:2], NOW)
+    poison, healthy = alerts(conn)
+    conn.execute("UPDATE alerts SET next_attempt_at = %s WHERE alert_id = %s",
+                 (NOW - timedelta(minutes=1), poison["alert_id"]))
+    return conn, feed, poison, healthy
+
+
+def by_id(conn) -> dict:
+    return {a["alert_id"]: a for a in alerts(conn)}
+
+
+def other_connection(conn):
+    another = psycopg.connect(conn.info.dsn, row_factory=dict_row)
+    another.autocommit = True
+    return another
+
+
+def test_a_malformed_alert_does_not_block_a_healthy_one(pg_store):
+    conn, feed, poison, healthy = one_alert_per_event(pg_store)
+    with conn:
+        broken = copy.deepcopy(feed)
+        next(e for e in broken["events"]
+             if e["event_id"] == str(poison["event_id"]))["venue"] = None
+        transport = LogTransport()
+        counts = dispatch_due(conn, transport, broken, NOW, "w1")
+        assert (counts["failed"], counts["sent"]) == (1, 1)
+        state = by_id(conn)
+        assert (state[poison["alert_id"]]["status"],
+                state[poison["alert_id"]]["last_error_code"]) == ("failed", "render_error")
+        assert state[healthy["alert_id"]]["status"] == "sent"
+        assert [m["event_id"] for _, _, m in transport.sent] == [str(healthy["event_id"])]
+
+
+def test_a_failing_alert_rolls_back_then_recovers_without_stopping_the_batch(
+        pg_store, monkeypatch):
+    conn, feed, poison, healthy = one_alert_per_event(pg_store)
+    with conn:
+        owed = alerts_module._owed
+
+        def flaky_owed(c, alert_id):
+            if alert_id == poison["alert_id"]:
+                raise psycopg.errors.DataError("row-level failure")
+            return owed(c, alert_id)
+
+        monkeypatch.setattr(alerts_module, "_owed", flaky_owed)
+        counts = dispatch_due(conn, LogTransport(), feed, NOW, "w1")
+        assert (counts["retry"], counts["sent"]) == (1, 1)
+        state = by_id(conn)
+        bad = state[poison["alert_id"]]
+        assert (bad["status"], bad["last_error_code"], bad["claim_token"]) == (
+            "pending", "dispatch_error", None)
+        assert bad["next_attempt_at"] > NOW  # Backed off, with a fixed code.
+        # The delivery rows written before the failure were rolled back with it.
+        assert conn.execute("SELECT count(*) AS n FROM alert_deliveries WHERE alert_id = %s",
+                            (poison["alert_id"],)).fetchone()["n"] == 0
+        assert state[healthy["alert_id"]]["status"] == "sent"
+
+
+def test_an_unexpected_transport_exception_is_uncertain_and_isolated(pg_store):
+    conn, feed, poison, healthy = one_alert_per_event(pg_store)
+    with conn:
+        class Exploding(LogTransport):
+            def send(self, channel, endpoint_ref, message, idempotency_key):
+                if message["alert_id"] == str(poison["alert_id"]):
+                    raise RuntimeError("client bug after the request may have left")
+                return super().send(channel, endpoint_ref, message, idempotency_key)
+
+        counts = dispatch_due(conn, Exploding(), feed, NOW, "w1")
+        assert (counts["retry"], counts["sent"]) == (1, 1)
+        (state,) = conn.execute("SELECT * FROM alert_deliveries WHERE alert_id = %s",
+                                (poison["alert_id"],)).fetchall()
+        assert (state["status"], state["last_error_code"]) == ("uncertain", "transport_exception")
+        assert by_id(conn)[healthy["alert_id"]]["status"] == "sent"
+
+
+def test_permanent_transport_errors_fail_without_retrying(pg_store):
+    store, feed, artists = seeded(pg_store)
+    queue_one(store, feed, artists)
+
+    class Rejecting(Transport):
+        def send(self, channel, endpoint_ref, message, idempotency_key):
+            raise TransportError("Endpoint <x@y> rejected!", permanent=True)
+
+    with connect(store) as conn:
+        assert dispatch_due(conn, Rejecting(), feed, NOW, "w1")["failed"] == 1
+        (alert,) = alerts(conn)
+        assert (alert["status"], alert["attempts"]) == ("failed", 1)
+        # A code that is not a fixed identifier is never stored as given.
+        assert deliveries(conn)["email"]["last_error_code"] == "transport_error"
+
+
+def test_repeated_crashes_reach_a_terminal_state(pg_store):
+    store, feed, artists = seeded(pg_store)
+    queue_one(store, feed, artists)
+    transport = LogTransport()
+    with connect(store) as conn:
+        at, claims, gaps = NOW, 0, []
+        for i in range(MAX_ATTEMPTS + 3):
+            if not claim_due(conn, at, f"crashing-{i}"):  # ...each worker dies holding it.
+                break
+            claims += 1
+            at += LEASE + timedelta(seconds=1)
+            dispatch_due(conn, transport, feed, at, "reaper")  # Recovers; nothing is due yet.
+            (alert,) = alerts(conn)
+            if alert["status"] != "pending":
+                break
+            gaps.append(alert["next_attempt_at"] - at)
+            at = alert["next_attempt_at"]
+        (alert,) = alerts(conn)
+        assert claims == MAX_ATTEMPTS  # Each crashed round counted exactly once.
+        assert (alert["status"], alert["attempts"], alert["last_error_code"]) == (
+            "failed", MAX_ATTEMPTS, "attempts_exhausted")
+        assert gaps == sorted(gaps) and gaps[0] > timedelta(0)  # Growing backoff.
+        assert transport.sent == []
+        assert claim_due(conn, at + timedelta(days=1), "late") == []
+
+
+def test_provider_acceptance_then_persistence_failure_leaves_reconciliation_evidence(pg_store):
+    store, feed, artists = seeded(pg_store)
+    queue_one(store, feed, artists)
+    worker = connect(store)
+    # The provider accepts the message, then the worker's database connection dies
+    # before the outcome commits.
+    provider = BlindTransport(on_send=worker.close)
+    with pytest.raises(psycopg.OperationalError):
+        dispatch_due(worker, provider, feed, NOW, "w1")  # Not reported as a good batch.
+    assert len(provider.keys) == 1
+    with connect(store) as conn:
+        (attempt,) = conn.execute("SELECT * FROM delivery_attempts").fetchall()
+        (delivery,) = conn.execute("SELECT * FROM alert_deliveries").fetchall()
+        # Durable evidence: the intent was committed before the send, under the same key
+        # the provider received.
+        assert (attempt["status"], delivery["status"]) == ("sending", "sending")
+        assert str(delivery["delivery_key"]) == provider.keys[0]
+        # After the lease, recovery marks the outcome unknown. This provider can neither
+        # look the key up nor de-duplicate it, so the message is never sent again.
+        dispatch_due(conn, provider, feed, NOW + LEASE + timedelta(seconds=1), "w2")
+        (alert,) = alerts(conn)
+        assert deliveries(conn)["email"]["status"] == "uncertain"
+        dispatch_due(conn, provider, feed, alert["next_attempt_at"], "w2")
+        (alert,) = alerts(conn)
+        assert (alert["status"], alert["last_error_code"]) == ("uncertain", "outcome_unknown")
+        assert len(provider.keys) == 1
+        (attempt,) = conn.execute("SELECT * FROM delivery_attempts").fetchall()
+        assert (attempt["status"], attempt["error_code"]) == ("uncertain", "lease_expired")
+
+
+def test_an_uncertain_delivery_is_reconciled_before_any_retry(pg_store):
+    store, feed, artists = seeded(pg_store)
+    queue_one(store, feed, artists)
+    worker = connect(store)
+    provider = LookupProvider()
+    deliver = provider.send
+
+    def accept_then_lose_the_database(channel, endpoint_ref, message, key):
+        result = deliver(channel, endpoint_ref, message, key)
+        worker.close()
+        return result
+
+    provider.send = accept_then_lose_the_database
+    with pytest.raises(psycopg.OperationalError):
+        dispatch_due(worker, provider, feed, NOW, "w1")
+    provider.send = deliver
+    with connect(store) as conn:
+        dispatch_due(conn, provider, feed, NOW + LEASE + timedelta(seconds=1), "w2")
+        (alert,) = alerts(conn)
+        assert dispatch_due(conn, provider, feed, alert["next_attempt_at"], "w2")["sent"] == 1
+        assert len(provider.sent) == 1  # Reconciled as delivered; not sent a second time.
+        (attempt,) = conn.execute("SELECT * FROM delivery_attempts").fetchall()
+        assert attempt["status"] == "sent" and attempt["provider_message_id"].startswith("log-")
+
+
+def test_a_lost_connection_is_never_recorded_as_a_successful_job(pg_store):
+    store, feed, artists = seeded(pg_store)
+    queue_one(store, feed, artists)
+    worker = connect(store)
+    provider = BlindTransport(on_send=worker.close)
+    with pytest.raises(psycopg.OperationalError):
+        run_job(worker, "dispatch_alerts", "k",
+                lambda: dispatch_due(worker, provider, feed, NOW, "w1"), NOW, "w1")
+    with connect(store) as conn:
+        (job,) = conn.execute("SELECT * FROM job_runs").fetchall()
+        assert job["status"] == "running"  # Left to lease recovery, never marked succeeded.
+
+
+def test_an_expired_worker_cannot_overwrite_its_replacement(pg_store):
+    store, feed, artists = seeded(pg_store)
+    queue_one(store, feed, artists)
+    provider = LookupProvider()
+    later = NOW + LEASE + timedelta(seconds=1)
+    takeover = {}
+
+    class Stalling(Transport):
+        def send(self, channel, endpoint_ref, message, key):
+            message_id = provider.send(channel, endpoint_ref, message, key)
+            # The first worker stalls past its lease. A replacement reusing the same worker
+            # name recovers the alert, reconciles the send and finishes it.
+            with connect(store) as other:
+                dispatch_due(other, provider, feed, later, "w1")
+                (alert,) = alerts(other)
+                takeover["counts"] = dispatch_due(other, provider, feed,
+                                                  alert["next_attempt_at"], "w1")
+                takeover["alert"] = alerts(other)[0]
+            return message_id  # The stalled worker now tries to record its outcome.
+
+    with connect(store) as stale:
+        counts = dispatch_due(stale, Stalling(), feed, NOW, "w1")
+        assert counts["lease_lost"] == 1 and counts["sent"] == 0
+        assert takeover["counts"]["sent"] == 1
+        (alert,) = alerts(stale)
+        # The replacement's result stands; nothing of the stale worker's was written.
+        assert alert == takeover["alert"]
+        assert (alert["status"], alert["claim_token"], alert["attempts"]) == ("sent", None, 2)
+        (attempt,) = stale.execute("SELECT * FROM delivery_attempts").fetchall()
+        assert attempt["status"] == "sent"
+        assert len(provider.sent) == 1
+
+
+@pytest.mark.parametrize("path", ["success", "failure"])
+def test_a_stale_job_completion_is_rejected(pg_store, path):
+    store, _ = pg_store
+    with connect(store) as conn:
+        replacement = {}
+
+        def stalled_work():
+            # The same worker name: only the attempt generation tells the claims apart.
+            later = NOW + LEASE + timedelta(minutes=3)
+            replacement["result"] = run_job(conn, "collect", "k", lambda: {"n": 2}, later, "w")
+            if path == "failure":
+                raise ValueError("the stale run fails late")
+            return {"n": 1}
+
+        assert run_job(conn, "collect", "k", stalled_work, NOW, "w") == {"status": "lease_lost"}
+        assert replacement["result"] == {"status": "succeeded", "n": 2}
+        (job,) = conn.execute("SELECT * FROM job_runs").fetchall()
+        assert (job["status"], job["attempt"], job["last_error_code"]) == ("succeeded", 2, None)
+
+
+def test_a_stale_generation_cannot_close_a_running_replacement(pg_store):
+    # Both claims are running under the same worker name; only the attempt generation
+    # separates them, so the old one must not be able to close the new one.
+    store, _ = pg_store
+
+    class Crash(BaseException):
+        pass
+
+    def crash():
+        raise Crash()
+
+    with connect(store) as conn:
+        with pytest.raises(Crash):
+            run_job(conn, "collect", "k", crash, NOW, "w")
+        (stale,) = conn.execute("SELECT * FROM job_runs").fetchall()
+        later = NOW + LEASE + timedelta(minutes=3)
+        closed = {}
+
+        def replacement_work():
+            closed["success"] = alerts_module._close_job(
+                conn, stale, later, status="succeeded", last_error_code=None)
+            closed["failure"] = alerts_module._close_job(
+                conn, stale, later, status="failed", last_error_code="ValueError",
+                run_after=later)
+            return {"n": 2}
+
+        assert run_job(conn, "collect", "k", replacement_work, later, "w") == {
+            "status": "succeeded", "n": 2}
+        assert closed == {"success": False, "failure": False}
+        (job,) = conn.execute("SELECT * FROM job_runs").fetchall()
+        assert (job["status"], job["attempt"]) == ("succeeded", 2)
+
+
+def test_a_repeatedly_crashing_job_is_dead_lettered(pg_store):
+    store, _ = pg_store
+
+    class Crash(BaseException):
+        """The process dies mid-work: nothing is recorded."""
+
+    def crash():
+        raise Crash()
+
+    with connect(store) as conn:
+        at = NOW
+        for _ in range(3):
+            with pytest.raises(Crash):
+                run_job(conn, "collect", "k", crash, at, "w", max_attempts=3)
+            assert run_job(conn, "collect", "k", crash, at + LEASE, "w", max_attempts=3) is None
+            at += LEASE + timedelta(hours=1)  # Past the lease and its backoff.
+        assert run_job(conn, "collect", "k", dict, at, "w") is None
+        (job,) = conn.execute("SELECT * FROM job_runs").fetchall()
+        assert (job["status"], job["attempt"], job["last_error_code"]) == (
+            "dead", 3, "lease_expired")
+
+
+def test_display_withdrawn_after_projection_suppresses_the_send(pg_store):
+    store, feed, artists = seeded(pg_store)
+    queue_one(store, feed, artists)
+    transport = LogTransport()
+    with connect(store) as conn:
+        # The tick projected the event as displayable; permission is withdrawn afterwards.
+        conn.execute("UPDATE source_permissions SET display_allowed = false")
+        counts = dispatch_due(conn, transport, feed, NOW, "w1", lookup=store_lookup(store))
+        assert counts["suppressed"] == 1 and transport.sent == []
+        assert alerts(conn)[0]["suppressed_reason"] == "not_displayable"
+
+
+def test_display_withdrawn_between_subscriptions_suppresses_the_next_send(pg_store):
+    conn, feed = two_channel_alert(pg_store)
+    with conn:
+        live = {"feed": feed}
+
+        class Withdrawing(LogTransport):
+            def send(self, channel, endpoint_ref, message, key):
+                live["feed"] = {"events": []}  # The next projection no longer shows it.
+                return super().send(channel, endpoint_ref, message, key)
+
+        transport = Withdrawing()
+        dispatch_due(conn, transport, feed, NOW, "w1",
+                     lookup=lambda event_id, at: feed_lookup(live["feed"])(event_id, at))
+        assert len(transport.sent) == 1
+        reasons = sorted(str(d["suppressed_reason"]) for d in deliveries(conn).values())
+        assert reasons == ["None", "not_displayable"]
+
+
+def test_consent_revoked_between_subscriptions_suppresses_the_next_send(pg_store):
+    conn, feed = two_channel_alert(pg_store)
+    with conn:
+        revoker = other_connection(conn)
+
+        class Revoking(LogTransport):
+            def send(self, channel, endpoint_ref, message, key):
+                # While one subscription is being sent, the user revokes the other.
+                revoker.execute("UPDATE notification_subscriptions SET revoked_at = %s "
+                                "WHERE endpoint_ref <> %s", (NOW, endpoint_ref))
+                return super().send(channel, endpoint_ref, message, key)
+
+        transport = Revoking()
+        assert dispatch_due(conn, transport, feed, NOW, "w1")["sent"] == 1
+        assert len(transport.sent) == 1
+        reasons = sorted(str(d["suppressed_reason"]) for d in deliveries(conn).values())
+        assert reasons == ["None", "no_current_consent"]
+        revoker.close()
+
+
+def test_expiry_between_subscriptions_suppresses_the_next_send(pg_store):
+    conn, feed = two_channel_alert(pg_store)
+    with conn:
+        # Due to expire a minute from now, well inside the worker's lease.
+        (alert,) = conn.execute("UPDATE alerts SET expires_at = %s RETURNING *",
+                                (NOW + timedelta(minutes=1),)).fetchall()
+        clock = {"now": NOW}
+
+        class Slow(LogTransport):
+            def send(self, channel, endpoint_ref, message, key):
+                clock["now"] = alert["expires_at"]  # The first send takes until expiry.
+                return super().send(channel, endpoint_ref, message, key)
+
+        transport = Slow()
+        dispatch_due(conn, transport, feed, NOW, "w1", clock=lambda: clock["now"])
+        assert len(transport.sent) == 1
+        reasons = sorted(str(d["suppressed_reason"]) for d in deliveries(conn).values())
+        assert reasons == ["None", "expired"]
