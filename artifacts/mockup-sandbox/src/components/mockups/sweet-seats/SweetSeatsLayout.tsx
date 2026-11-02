@@ -18,7 +18,7 @@ export function SweetSeatsLayout() {
     return textMatch && filterMatch;
   }), [filter, followed, query]);
 
-  return <main className="ss-layout">
+  return <main className="ss-layout" data-ss-brand="midnight-session">
     <header className="ss-top">
       <div className="ss-wordmark"><span className="ss-mark">S</span><span>sweet seats</span></div>
       <div className="ss-top-right"><span className="ss-demo">LOCAL DISCOVERY DEMO</span><a className="ss-about" href="#source-notes">About this preview</a></div>
