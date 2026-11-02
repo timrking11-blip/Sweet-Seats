@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "uTggv1X5DZcPDXlVLhG6f"
+uri = "file://docs/next-buildout-plan.md"
+type = "text"
+title = "Sweet Seats — Next Buildout Plan"
+description = "Planning-only review with verified current state, reuse decisions, five implementation increments, estimates, acceptance checks and an implementation prompt for the first increment only."
+logical_id = "e7804e82-cf65-4a81-96c6-71c7373fe2f7"
+content_hash = "sha256:7732d00e92c058c7bf103610a732a5ae619414d20823ed1296454b7fd50fca4d"
+size = 29056
+mtime_ms = 1793603175350
+storage_uri = "gcs://replit-rams-assets-worf/rams/assets/repl:48fefa5e-c86c-4ba8-ab95-677f45aa8c4a/e7804e82-cf65-4a81-96c6-71c7373fe2f7/4d340e43-e360-4439-9128-c243e2f70090"
+storage_version_token = "1793603198429164"
+content_type = "text/markdown"

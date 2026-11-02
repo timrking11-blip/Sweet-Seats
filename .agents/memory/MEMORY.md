@@ -1,1 +1,2 @@
 - [Expo compatibility](expo-compatibility.md) — validate scaffold versions and splash configuration against the installed SDK, not older examples.
+- [Brand direction](brand-direction.md) — supplied navy/cream/coral/teal specification supersedes earlier proposals; the flat headphone-and-seat logo reference is required.
