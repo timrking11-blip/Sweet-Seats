@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import "./SweetSeatsLayout.css";
+import sweetSeatsMusicFanLogo from "../../../../../../attached_assets/0_Sweet_Seats_Music_Fan_Logo_1793606109380.png";
 
 const nights = [
   { id: "violet-static", day: "18", month: "MAY", status: "Just announced", title: "Violet Static", artist: "Violet Static · with June Bloom", venue: "Baby's All Right", area: "Williamsburg", time: "8:00 PM · Brooklyn", records: 2, freshness: "Observed 2h ago" },
@@ -20,7 +21,7 @@ export function SweetSeatsLayout() {
 
   return <main className="ss-layout" data-ss-brand="midnight-session">
     <header className="ss-top">
-      <div className="ss-wordmark"><span className="ss-mark">S</span><span>sweet seats</span></div>
+      <div className="ss-wordmark"><img className="ss-logo" src={sweetSeatsMusicFanLogo} alt="Sweet Seats Music Fan" /></div>
       <div className="ss-top-right"><span className="ss-demo">LOCAL DISCOVERY DEMO</span><a className="ss-about" href="#source-notes">About this preview</a></div>
     </header>
     <section className="ss-board">

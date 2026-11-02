@@ -23,8 +23,8 @@
   justify-content: space-between;
   border-bottom: 1px solid var(--ss-rule);
 }
-.ss-wordmark { display: flex; align-items: center; gap: 11px; font: 700 20px var(--ss-font-display); letter-spacing: -.8px; }
-.ss-mark { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid var(--ss-text); border-radius: 50%; font-size: 18px; }
+.ss-wordmark { display: flex; align-items: center; flex: 0 0 180px; width: 180px; height: 82px; }
+.ss-logo { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; }
 .ss-top-right { display: flex; align-items: center; gap: 23px; color: var(--ss-muted-text); font-size: 13px; }
 .ss-demo { color: var(--ss-accent); font: 700 12px var(--ss-font-body); letter-spacing: 1px; }
 .ss-about { min-height: var(--ss-target-min); display: inline-flex; align-items: center; color: var(--ss-text); text-decoration: none; border-bottom: 1px solid var(--ss-rule); padding: 8px 0; }
@@ -104,7 +104,8 @@
 @media (max-width: 760px) {
   .ss-layout { overflow: visible; }
   .ss-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 10px; min-height: 68px; padding: 10px 20px; }
-  .ss-wordmark { grid-column: 1; gap: 8px; font-size: 18px; white-space: nowrap; }
+  .ss-wordmark { grid-column: 1; flex-basis: clamp(130px, 42vw, 164px); width: clamp(130px, 42vw, 164px); height: clamp(61px, 19.2vw, 75px); }
+  .ss-logo { height: 100%; }
   .ss-top-right { display: contents; }
   .ss-about { grid-column: 2; grid-row: 1; font-size: 12px; white-space: nowrap; }
   .ss-demo { grid-column: 1 / -1; grid-row: 2; justify-self: end; max-width: none; text-align: right; line-height: 1.4; font-size: 12px; }
