@@ -332,6 +332,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: 'catalog:'
         version: 5.2.0(vite@7.3.7(@types/node@25.9.9)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+      '@workspace/sweet-seats-design-system':
+        specifier: workspace:*
+        version: link:../sweet-seats-design-system
       chokidar:
         specifier: ^4.0.3
         version: 4.0.3
@@ -527,6 +530,9 @@ importers:
       '@workspace/api-client-react':
         specifier: workspace:*
         version: link:../../lib/api-client-react
+      '@workspace/sweet-seats-design-system':
+        specifier: workspace:*
+        version: link:../sweet-seats-design-system
       class-variance-authority:
         specifier: 'catalog:'
         version: 0.7.1

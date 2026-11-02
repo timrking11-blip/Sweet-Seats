@@ -2,14 +2,14 @@
 
 ## Source
 
-- Shared class: `.ss-link` in `lib/sweet-seats-brand/controls.css`.
-- Active usage: discovery homepage, shared style guide, and coming-soon
-  homepage.
+- Package component: `src/components/ui/link.tsx`.
+- Variants: `text`, `plain`, `heading`, `primary`, and `quiet`; all retain
+  native anchor semantics.
 
 ## Preserved behavior
 
 - Native `<a>` element and destination semantics.
-- Visible teal link treatment, underline on hover, and keyboard focus.
+- Visible teal text-link treatment, action-link treatments, and keyboard focus.
 - A minimum 44px target in the shared web foundation.
 
 Use link text that names the destination. Color is not the only interaction

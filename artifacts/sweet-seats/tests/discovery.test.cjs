@@ -15,6 +15,38 @@ const compiled = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
 const component = new Module(filename, module);
 component.filename = filename;
 component.paths = Module._nodeModulePaths(path.dirname(filename));
+const fake = (tag, fixedProps = {}) => function Component({ children, ...props }) {
+  return React.createElement(tag, { ...fixedProps, ...props }, children);
+};
+const designSystem = {
+  Button: fake('button'),
+  Link: fake('a'),
+  Field: fake('div'),
+  FieldLabel: fake('label'),
+  FieldControl: fake('input'),
+  FieldHelp: fake('p'),
+  StatusMessage: ({ tone, role, children, ...props }) =>
+    React.createElement('p', { ...props, role: role ?? (tone === 'error' ? 'alert' : 'status'), 'data-tone': tone }, children),
+};
+component.require = (id) => {
+  if (id.startsWith('@workspace/sweet-seats-design-system/components/ui/')) {
+    const name = id.split('/').at(-1);
+    if (name === 'button') return { Button: designSystem.Button };
+    if (name === 'link') return { Link: designSystem.Link };
+    if (name === 'field') return {
+      Field: designSystem.Field,
+      FieldLabel: designSystem.FieldLabel,
+      FieldControl: designSystem.FieldControl,
+      FieldHelp: designSystem.FieldHelp,
+    };
+    if (name === 'status') return { StatusMessage: designSystem.StatusMessage };
+  }
+  if (id === './demo-notice') return {
+    __esModule: true,
+    default: () => React.createElement('p', null, 'Synthetic demo only. No working sign-in, saved events, artist follows, alert management, ticket purchases, or live ticket links.'),
+  };
+  return Module.prototype.require.call(component, id);
+};
 component._compile(compiled, filename);
 const { DiscoveryFeedView, eventTime } = component.exports;
 const event = {
@@ -39,6 +71,11 @@ test('network failure renders an alert and retry', () => {
   assert.match(html, /role="alert"/);
   assert.match(html, /Try again/);
 });
+test('a missing fixture feed stays distinct from an API failure', () => {
+  const html = render({ state: 'missing' });
+  assert.match(html, /stored demo feed is not available for display/);
+  assert.doesNotMatch(html, /Discovery is unavailable/);
+});
 test('empty is distinct from an unavailable source', () => {
   const html = render({ state: 'ready', data: { ...base, status: 'empty', events: [] } });
   assert.match(html, /No events returned/);
@@ -57,12 +94,12 @@ test('unresolved identities remain visible without inventing an event', () => {
   assert.match(html, /Unresolved identities/);
   assert.match(html, /Unknown Night/);
   assert.match(html, /no match was guessed/);
-  assert.equal((html.match(/class="event-card /g) || []).length, 1);
+  assert.equal((html.match(/class="ss-event"/g) || []).length, 1);
 });
 test('blocked feeds explain permissions and withhold event cards', () => {
   const html = render({ state: 'ready', data: { ...base, status: 'blocked', events: [] } });
   assert.match(html, /permissions do not allow/);
-  assert.doesNotMatch(html, /class="event-card /);
+  assert.doesNotMatch(html, /class="ss-event"/);
 });
 test('search scope, refresh limitations and original stale evidence stay explicit', () => {
   const html = render({ state: 'ready', data: { ...base, events: [{ ...event, stale: true }] } });

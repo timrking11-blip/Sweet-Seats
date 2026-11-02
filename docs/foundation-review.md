@@ -59,7 +59,7 @@ Evidence screenshots, captured in Chromium at the listed CSS pixel width, are un
 - `discovery-320.png`, `discovery-390.png`, `discovery-768.png`, `discovery-1024.png`, `discovery-1440.png`; corresponding `public-*` and `guide-*`: responsive visual test cases. The 390/1440 cases are full-page; other widths are viewport captures.
 - `checks.json`, `guide-checks.json`: measured layout, contrast inputs, focus and reduced-motion evidence.
 
-The development-only guide uses the existing marks as provisional; the specified headphone-and-seat image remains unavailable. The guide's example form does not submit. The old discovery orbs and the Lovable poster are retained legacy illustrations, not claims that the approved new logo exists. This is not a full WCAG certification, physical-device check or deployment/release check.
+The web header uses the user-supplied Music Fan logo; final multi-format logo packaging remains separate. The development guide's example form does not submit. The old discovery orbs and the Lovable poster remain legacy illustrations, not substitutes for that supplied logo. This is not a full WCAG certification, physical-device check or deployment/release check.
 
 Verification tooling:
 
