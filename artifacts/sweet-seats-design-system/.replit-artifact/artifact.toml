@@ -1,0 +1,19 @@
+kind = "design-system"
+previewPath = "/sweet-seats-design-system/"
+title = "Sweet Seats Design System"
+description = "A source-backed Sweet Seats design system: Midnight Session brand tokens, the supplied logo, and reusable web UI foundations."
+version = "1.0.0"
+id = "artifacts/sweet-seats-design-system"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/sweet-seats-design-system/" ]
+localPort = 20691
+
+[services.development]
+run = "pnpm --filter @workspace/sweet-seats-design-system run dev"
+
+[services.env]
+PORT = "20691"
+BASE_PATH = "/sweet-seats-design-system/"
