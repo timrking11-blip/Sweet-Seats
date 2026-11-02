@@ -6,11 +6,15 @@
  * OpenAPI spec version: 0.1.0
  */
 import {
+  useMutation,
   useQuery
 } from '@tanstack/react-query';
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult
 } from '@tanstack/react-query';
@@ -198,6 +202,158 @@ export function useGetDiscoveryEvent<TData = Awaited<ReturnType<typeof getDiscov
  ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
 
   const queryOptions = getGetDiscoveryEventQueryOptions(eventId,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
+
+export const getHeadSweetSeatsFinalCutUrl = () => {
+
+
+
+
+  return `/api/storage/public-objects/sweet-seats-final-cut-v3.mp4`
+}
+
+/**
+ * @summary Check whether the public Sweet Seats trailer is available
+ */
+export const headSweetSeatsFinalCut = async ( options?: Parameters<typeof customFetch>[1]): Promise<void> => {
+
+  return customFetch<void>(getHeadSweetSeatsFinalCutUrl(),
+  {
+    ...options,
+    method: 'HEAD'
+
+
+  }
+);}
+
+
+
+
+
+export const getHeadSweetSeatsFinalCutMutationKey = () => ['headSweetSeatsFinalCut'] as const;
+
+export const getHeadSweetSeatsFinalCutMutationOptions = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof headSweetSeatsFinalCut>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof headSweetSeatsFinalCut>>, TError,void, TContext> => {
+
+const mutationKey = getHeadSweetSeatsFinalCutMutationKey();
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof headSweetSeatsFinalCut>>, void> = () => {
+
+
+          return  headSweetSeatsFinalCut(requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type HeadSweetSeatsFinalCutMutationResult = NonNullable<Awaited<ReturnType<typeof headSweetSeatsFinalCut>>>
+
+    export type HeadSweetSeatsFinalCutMutationError = ErrorType<void>
+
+
+    /**
+ * @summary Check whether the public Sweet Seats trailer is available
+ */
+export const useHeadSweetSeatsFinalCut = <TError = ErrorType<void>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof headSweetSeatsFinalCut>>, TError,void, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof headSweetSeatsFinalCut>>,
+        TError,
+        void,
+        TContext
+      > => {
+      return useMutation(getHeadSweetSeatsFinalCutMutationOptions(options));
+    }
+
+export const getGetSweetSeatsFinalCutUrl = () => {
+
+
+
+
+  return `/api/storage/public-objects/sweet-seats-final-cut-v3.mp4`
+}
+
+/**
+ * Returns the published Sweet Seats MP4 and supports byte-range playback.
+ * @summary Stream the public Sweet Seats trailer
+ */
+export const getSweetSeatsFinalCut = async ( options?: Parameters<typeof customFetch>[1]): Promise<Blob> => {
+
+  return customFetch<Blob>(getGetSweetSeatsFinalCutUrl(),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getGetSweetSeatsFinalCutQueryKey = () => {
+    return [
+    `/api/storage/public-objects/sweet-seats-final-cut-v3.mp4`
+    ] as const;
+    }
+
+
+export const getGetSweetSeatsFinalCutQueryOptions = <TData = Awaited<ReturnType<typeof getSweetSeatsFinalCut>>, TError = ErrorType<void>>( options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSweetSeatsFinalCut>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getGetSweetSeatsFinalCutQueryKey();
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof getSweetSeatsFinalCut>>> = ({ signal }) => getSweetSeatsFinalCut({ signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof getSweetSeatsFinalCut>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type GetSweetSeatsFinalCutQueryResult = NonNullable<Awaited<ReturnType<typeof getSweetSeatsFinalCut>>>
+export type GetSweetSeatsFinalCutQueryError = ErrorType<void>
+
+
+/**
+ * @summary Stream the public Sweet Seats trailer
+ */
+
+export function useGetSweetSeatsFinalCut<TData = Awaited<ReturnType<typeof getSweetSeatsFinalCut>>, TError = ErrorType<void>>(
+  options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof getSweetSeatsFinalCut>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getGetSweetSeatsFinalCutQueryOptions(options)
 
   const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
 

@@ -131,6 +131,19 @@ export const GetDiscoveryEventResponse = zod.object({
 
 
 /**
+ * @summary Check whether the public Sweet Seats trailer is available
+ */
+export const HeadSweetSeatsFinalCutResponse = zod.unknown()
+
+
+/**
+ * Returns the published Sweet Seats MP4 and supports byte-range playback.
+ * @summary Stream the public Sweet Seats trailer
+ */
+export const GetSweetSeatsFinalCutResponse = zod.unknown()
+
+
+/**
  * Returns server health status
  * @summary Health check
  */

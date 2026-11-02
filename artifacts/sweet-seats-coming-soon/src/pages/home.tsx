@@ -1,7 +1,9 @@
 import { brandNavigation } from "../../../../lib/sweet-seats-brand/foundation";
+import { useEffect, useState } from "react";
 
 const GH = "https://github.com/timrking11-blip";
 const BASE = import.meta.env.BASE_URL;
+const VIDEO_SOURCE = "/api/storage/public-objects/sweet-seats-final-cut-v3.mp4";
 
 const wrap = "mx-auto w-full max-w-[1250px] px-5 sm:px-8";
 const eyebrow = "text-xs font-semibold tracking-[0.18em] text-coral";
@@ -15,45 +17,64 @@ function Logo() {
   );
 }
 
-function Poster() {
+function Trailer() {
+  const [availability, setAvailability] = useState<
+    "checking" | "available" | "unavailable"
+  >("checking");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(VIDEO_SOURCE, { method: "HEAD", cache: "no-store", signal: controller.signal })
+      .then((response) =>
+        setAvailability(response.ok ? "available" : "unavailable"),
+      )
+      .catch(() => setAvailability("unavailable"));
+
+    return () => controller.abort();
+  }, []);
+
   return (
-    <figure
-      aria-hidden="true"
-      className="relative mx-auto aspect-[4/5] w-full max-w-[480px] overflow-hidden rounded-2xl border border-rule bg-charcoal"
-    >
-      <svg viewBox="0 0 400 500" className="absolute inset-0 h-full w-full" fill="none">
-        {[60, 100, 140, 180, 220, 260].map((r) => (
-          <circle key={r} cx="200" cy="250" r={r} className="stroke-rule" strokeWidth="1" />
-        ))}
-      </svg>
-      <p className="absolute left-0 right-0 top-6 text-center text-[11px] font-semibold tracking-[0.22em] text-soft">
-        GOOD NIGHTS START HERE
-      </p>
-      <p className="absolute bottom-6 left-0 right-0 text-center text-[11px] font-semibold tracking-[0.22em] text-soft">
-        LESS SCROLLING. MORE ENCORES.
-      </p>
-      <div className="absolute left-1/2 top-1/2 w-[64%] -translate-x-1/2 -translate-y-1/2 rotate-[-6deg] rounded-xl bg-coral p-5 text-ink shadow-2xl">
-        <div className="flex justify-between text-[10px] font-bold tracking-[0.18em]">
-          <span>SWEET SEATS</span>
-          <span>ADMIT: YOU</span>
-        </div>
-        <p className="mt-5 text-3xl font-black leading-none tracking-tight sm:text-4xl">YOUR NEXT</p>
-        <p className="mt-1 font-sans text-2xl font-bold sm:text-3xl">“I was there.”</p>
-        <p className="mt-3 text-xs font-medium">For the love of live music.</p>
-        <div className="my-4 border-t-2 border-dashed border-ink/50" />
-        <div className="flex items-end justify-between gap-3">
-          <p className="text-[10px] font-semibold uppercase leading-tight tracking-wider">
-            First stop
-            <br />
-            New York &amp; beyond
-          </p>
-          <svg viewBox="0 0 60 20" className="h-5 w-16" >
-            {[0, 3, 5, 9, 12, 14, 18, 21, 25, 27, 31, 35, 37, 41, 44, 48, 50, 54, 57].map((x, i) => (
-              <rect key={x} x={x} y="0" width={i % 3 ? 1.2 : 2} height="20" className="fill-ink" />
-            ))}
-          </svg>
-        </div>
+    <figure className="mx-auto w-full max-w-[560px]">
+      <div className="overflow-hidden rounded-2xl border border-rule bg-charcoal p-2">
+        {availability !== "available" ? (
+          <div className="relative aspect-video overflow-hidden rounded-xl bg-charcoal">
+            <img
+              src={`${BASE}sweet-seats-final-cut-v3-poster.jpg`}
+              alt=""
+              aria-hidden="true"
+              className="h-full w-full object-cover"
+            />
+            <p
+              role="status"
+              className="absolute inset-x-0 bottom-0 bg-background/90 px-4 py-3 text-sm text-soft"
+            >
+              {availability === "checking"
+                ? "Checking the film preview…"
+                : "The film preview isn’t available right now. Please check back soon."}
+            </p>
+          </div>
+        ) : (
+          <video
+            className="aspect-video w-full rounded-xl bg-background object-contain"
+            controls
+            playsInline
+            preload="none"
+            poster={`${BASE}sweet-seats-final-cut-v3-poster.jpg`}
+            aria-label="Sweet Seats short film about live music in New York and nearby"
+            aria-describedby="trailer-caption"
+            onError={() => setAvailability("unavailable")}
+          >
+            <source
+              src={VIDEO_SOURCE}
+              type="video/mp4"
+            />
+            Your browser does not support the video player.
+          </video>
+        )}
       </div>
+      <figcaption id="trailer-caption" className="px-2 pt-3 text-sm leading-relaxed text-soft">
+        A 27-second film about the kind of live-music nights Sweet Seats is being built for.
+      </figcaption>
     </figure>
   );
 }
@@ -100,7 +121,7 @@ export default function Index() {
               <p className="text-sm text-soft">Synthetic demo available now. No connected waitlist.</p>
             </div>
           </div>
-          <Poster />
+          <Trailer />
         </section>
 
         <div className="border-y border-rule">

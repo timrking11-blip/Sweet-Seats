@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: storage
+    description: Public, app-owned media assets
 paths:
   /discovery/events:
     get:
@@ -48,6 +50,38 @@ paths:
         "404": { description: "Missing or withheld event, not a ticket availability signal" }
         "422": { description: Invalid event identifier }
         "503": { description: Discovery store unavailable }
+  /storage/public-objects/sweet-seats-final-cut-v3.mp4:
+    head:
+      operationId: headSweetSeatsFinalCut
+      tags: [storage]
+      summary: Check whether the public Sweet Seats trailer is available
+      responses:
+        "200": { description: Trailer is available }
+        "404": { description: Trailer has not been uploaded to public storage }
+        "500": { description: Public video could not be checked }
+    get:
+      operationId: getSweetSeatsFinalCut
+      tags: [storage]
+      summary: Stream the public Sweet Seats trailer
+      description: Returns the published Sweet Seats MP4 and supports byte-range playback.
+      responses:
+        "200":
+          description: Full video response
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        "206":
+          description: Partial video response for byte-range playback
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        "404": { description: Trailer has not been uploaded to public storage }
+        "416": { description: Requested byte range is not satisfiable }
+        "500": { description: Public video could not be read }
   /healthz:
     get:
       operationId: healthCheck

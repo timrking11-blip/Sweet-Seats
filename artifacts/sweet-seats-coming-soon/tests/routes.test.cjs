@@ -52,6 +52,12 @@ test('/ renders the coming-soon landing page', () => {
   assert.match(html, /class="ss-button ss-button--primary/);
   assert.match(html, /class="ss-link/);
   assert.match(html, /No connected waitlist/);
+  assert.match(html, /Checking the film preview/);
+  assert.match(fs.readFileSync(path.resolve(__dirname, '../src/pages/home.tsx'), 'utf8'), /preload="none"/);
+  assert.match(fs.readFileSync(path.resolve(__dirname, '../src/pages/home.tsx'), 'utf8'), /sweet-seats-final-cut-v3\.mp4/);
+  assert.match(html, /sweet-seats-final-cut-v3-poster\.jpg/);
+  assert.match(html, /27-second film/);
+  assert.doesNotMatch(fs.readFileSync(path.resolve(__dirname, '../src/pages/home.tsx'), 'utf8'), /\bautoPlay\b/);
   assert.doesNotMatch(html, /<form|<input|Join the waitlist/);
 });
 
