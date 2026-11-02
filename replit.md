@@ -1,45 +1,36 @@
-# [Project name]
+# Sweet Seats
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+NYC-area live music discovery with source provenance, migrated from the imported Next.js/Python project to a pnpm workspace.
 
-## Run & Operate
+## Run and verify
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- Frontend managed workflow: `artifacts/sweet-seats: web`.
+- Backend managed workflow: `artifacts/api-server: API Server`.
+- `pnpm --filter @workspace/sweet-seats test` checks the original discovery UI states.
+- `pnpm --filter @workspace/scripts run test:sweet-seats http://localhost:80 [chromium-executable]` runs the browser smoke checks; omit the executable when Playwright browsers are installed. Screenshots go to ignored `generated-artifacts/migration/`.
+- `uv run --frozen python -m pytest services/api/tests tests -q` checks the original Python suite. Database-dependent tests require an explicitly configured disposable local PostgreSQL database and otherwise skip.
+- `pnpm --filter @workspace/sweet-seats run typecheck` and `pnpm --filter @workspace/api-server run typecheck` check artifact types.
+- API probes go through the shared proxy: `http://localhost:80/api/discovery/events`.
+- Run workflows, not a workspace-root development command. Managed workflows provide `PORT` and `BASE_PATH`.
 
-## Stack
+## Structure
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- `artifacts/sweet-seats`: Vite + React app; original CSS and components in `src/app`. Routes `/` and `/events/:eventId`.
+- `artifacts/api-server`: Express entry point. Forwards `/api/discovery/*` to the original Python `/v1/*`, and `/api/v1/*` to `/v1/*`, using a private Unix socket.
+- `services/api`: preserved FastAPI application and Python domain logic. `replit_server.py` starts it and initializes the original synthetic fixture only if no JSON store exists and no database is configured.
+- `tests/fixtures/discovery/nyc.json`: original invented event data.
+- `supabase`, `db`, `jobs`, `adapters`, `docs`: preserved original migrations, backend logic and governance documents.
+- `.migration-backup`: original imported tree, retained for reference and excluded from publishing.
 
-## Where things live
+## Migration decisions and limits
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- Preserve the Python service rather than translate its identity reconciliation, permissions, authentication and persistence rules into TypeScript.
+  **Why:** a rewrite would risk changing the imported product's safety and data contracts. Express owns the managed API port and supervises the Python process; build installs Python dependencies from `uv.lock`.
+- Keep the existing JSON demo mode unless the owner explicitly configures original PostgreSQL storage. Never connect, replace or migrate an external database automatically, and never silently fall back from a configured database.
+  **Why:** the import's local preview is fixture-backed; database provisioning and hosted services were not activated.
+- No live source, paid research call, user notification, predictive advice or new authentication provider was activated by the migration. Existing Supabase token verification remains unchanged and unavailable without its original configuration.
+  **Why:** the imported product explicitly gates provider use, permissions, consent and production infrastructure behind owner approvals.
+- Synthetic observations keep their original dates and freshness evidence. Refreshing the feed does not fabricate fresh observations.
+- JSON state under `.local/discovery.json` is a single-writer local demo, not production persistence. Do not publish it as a live multi-user service without separately provisioning approved durable storage.
 
-## Architecture decisions
-
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
-
-## Product
-
-_Describe the high-level user-facing capabilities of this app once they exist._
-
-## User preferences
-
-_Populate as you build — explicit user instructions worth remembering across sessions._
-
-## Gotchas
-
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+See `README.md` and `docs/contracts/` for original product scope and contracts; references to Next.js/Vercel in those historical documents describe the imported stack, not the active Replit frontend.

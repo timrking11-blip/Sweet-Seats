@@ -1,0 +1,7 @@
+-- WITHDRAWN / NOT APPLIED: superseded by SS-RESEARCH-0.2 contract definitions.
+-- Intentionally contains no DDL. Earlier active-per-issue queue conflated execution
+-- with publication and did not preserve completed-request deduplication.
+-- Future PostgreSQL migration must implement the logical records, cardinalities,
+-- durable leases, exact approvals, expiry, roles and outbox in
+-- docs/contracts/research-v0.2.md after project association is confirmed.
+-- No extension, live schema or production resource change is authorized here.

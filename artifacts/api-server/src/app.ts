@@ -3,6 +3,7 @@ import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { discoveryProxy } from "./lib/discovery-service";
 
 const app: Express = express();
 
@@ -26,6 +27,12 @@ app.use(
   }),
 );
 app.use(cors());
+// Forward the original request stream before Express consumes JSON bodies.
+app.use("/api/discovery", discoveryProxy);
+app.use("/api/v1", discoveryProxy);
+app.get("/api/health", discoveryProxy);
+app.get("/api/openapi.json", discoveryProxy);
+app.use("/api/docs", discoveryProxy);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

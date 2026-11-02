@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Sweet Seats"
+description = "NYC-area live music discovery with source-backed concert information and event details, preserving the imported Sweet Seats app."
+version = "1.0.0"
+id = "artifacts/sweet-seats"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24689
+
+[services.development]
+run = "pnpm --filter @workspace/sweet-seats run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/sweet-seats", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/sweet-seats/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24689"
+BASE_PATH = "/"
