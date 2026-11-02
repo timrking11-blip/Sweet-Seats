@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 48" role="img" aria-labelledby="t">
+  <title id="t">Sweet Seats</title>
+  <g transform="translate(2 4) rotate(-6 20 20)">
+    <path d="M2 8h36v9a3.5 3.5 0 0 0 0 7v9H2v-9a3.5 3.5 0 0 0 0-7z" fill="#ff8968"/>
+    <path d="M28 10v21" stroke="#15161a" stroke-width="1.2" stroke-dasharray="2 2"/>
+    <path d="M15 13.5l1.8 3.7 4 .5-2.9 2.8.7 4-3.6-1.9-3.6 1.9.7-4-2.9-2.8 4-.5z" fill="#15161a"/>
+  </g>
+  <text x="52" y="32" font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="25" font-weight="800" letter-spacing="-0.5" fill="#f3f0e8">sweet <tspan fill="#ff8968">seats</tspan></text>
+</svg>

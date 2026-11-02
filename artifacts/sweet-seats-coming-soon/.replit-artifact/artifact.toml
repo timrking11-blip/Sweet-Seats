@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/coming-soon/"
+title = "Sweet Seats — Coming Soon"
+description = "The imported Lovable Sweet Seats coming-soon website, preserved as a separate runnable site alongside the existing discovery demo."
+version = "1.0.0"
+id = "artifacts/sweet-seats-coming-soon"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/coming-soon/" ]
+localPort = 18185
+
+[services.development]
+run = "pnpm --filter @workspace/sweet-seats-coming-soon run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/sweet-seats-coming-soon", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/sweet-seats-coming-soon/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "18185"
+BASE_PATH = "/coming-soon/"

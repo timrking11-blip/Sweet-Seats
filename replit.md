@@ -16,6 +16,7 @@ NYC-area live music discovery with source provenance, migrated from the imported
 ## Structure
 
 - `artifacts/sweet-seats`: Vite + React app; original CSS and components in `src/app`. Routes `/` and `/events/:eventId`.
+- `artifacts/sweet-seats-coming-soon`: separately imported Lovable landing site at `/coming-soon/`; see its `IMPORT.md`. Its branding is preserved independently of the discovery demo.
 - `artifacts/api-server`: Express entry point. Forwards `/api/discovery/*` to the original Python `/v1/*`, and `/api/v1/*` to `/v1/*`, using a private Unix socket.
 - `services/api`: preserved FastAPI application and Python domain logic. `replit_server.py` starts it and initializes the original synthetic fixture only if no JSON store exists and no database is configured.
 - `tests/fixtures/discovery/nyc.json`: original invented event data.
@@ -23,6 +24,8 @@ NYC-area live music discovery with source provenance, migrated from the imported
 - `.migration-backup`: original imported tree, retained for reference and excluded from publishing.
 
 ## Migration decisions and limits
+- Keep the Lovable coming-soon site separate from the discovery app.
+  **Why:** importing another version must not overwrite the working discovery experience or redesign either source.
 
 - Preserve the Python service rather than translate its identity reconciliation, permissions, authentication and persistence rules into TypeScript.
   **Why:** a rewrite would risk changing the imported product's safety and data contracts. Express owns the managed API port and supervises the Python process; build installs Python dependencies from `uv.lock`.
