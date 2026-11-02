@@ -90,12 +90,12 @@ export default function Index() {
             </p>
             <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
               <a
-                href="#the-idea"
+                href="/"
                 className="inline-flex w-fit items-center rounded-full bg-foreground px-6 py-3 text-sm font-bold text-ink transition-opacity hover:opacity-90"
               >
-                Get to know Sweet Seats ↓
+                Explore the discovery demo →
               </a>
-              <p className="text-sm text-soft">A little less searching. A lot more live music.</p>
+              <p className="text-sm text-soft">Synthetic demo available now. No connected waitlist.</p>
             </div>
           </div>
           <Poster />

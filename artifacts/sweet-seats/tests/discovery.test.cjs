@@ -64,3 +64,12 @@ test('blocked feeds explain permissions and withhold event cards', () => {
   assert.match(html, /permissions do not allow/);
   assert.doesNotMatch(html, /class="event-card /);
 });
+test('search scope, refresh limitations and original stale evidence stay explicit', () => {
+  const html = render({ state: 'ready', data: { ...base, events: [{ ...event, stale: true }] } });
+  assert.match(html, /neighborhood on this page/);
+  assert.match(html, /aria-describedby="refresh-note"/);
+  assert.match(html, /Reloads stored observations only/);
+  assert.match(html, /Does not collect live events or update observation freshness/);
+  assert.match(html, /Stale observation/);
+  assert.match(html, /dateTime="2026-10-18T06:50:00Z"/);
+});

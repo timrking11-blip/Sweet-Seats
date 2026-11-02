@@ -101,7 +101,10 @@ export function DiscoveryFeedView({ result, retry, offset = 0, setOffset = () =>
       <label htmlFor="event-search">Find an artist, venue, or neighborhood on this page
         <input id="event-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Try Violet Static or Brooklyn" />
       </label>
-      <button className="secondary" onClick={retry}>Refresh feed</button>
+      <div className="refresh-control">
+        <button className="secondary" aria-describedby="refresh-note" onClick={retry}>Refresh feed</button>
+        <p id="refresh-note">Reloads stored observations only. Does not collect live events or update observation freshness.</p>
+      </div>
     </div>
     {data.status === "partial" && <p className="data-warning" role="status">A source failed. Previously observed events remain available; their timestamps have not been refreshed.</p>}
     {data.status === "unavailable" && <p className="data-warning" role="alert">Source unavailable. This is a collection failure, not evidence of no events or sold-out tickets.</p>}

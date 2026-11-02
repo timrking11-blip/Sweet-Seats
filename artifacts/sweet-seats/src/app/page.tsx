@@ -1,12 +1,13 @@
 
 import { DiscoveryFeed } from "./discovery";
+import DemoNotice from "./demo-notice";
 
 export default function Home() {
   return <main id="main-content">
     <a className="skip-link" href="#discover-title">Skip to events</a>
     <nav className="topbar" aria-label="Primary navigation">
       <a className="brand" href="/" aria-label="Sweet Seats home"><span className="brand-mark">S</span><span>sweet seats</span></a>
-      <span className="demo-label">LOCAL DISCOVERY DEMO</span>
+      <div className="nav-actions"><span className="demo-label">LOCAL DISCOVERY DEMO</span><a className="text-button" href="/coming-soon/">About Sweet Seats</a></div>
     </nav>
     <section className="hero" id="top">
       <div className="hero-copy"><p className="eyebrow">NEW YORK · LIVE MUSIC</p>
@@ -24,6 +25,7 @@ export default function Home() {
       <span>Invented events, artists, and venues. No live sources or notifications are active.</span></section>
     <section className="discover" aria-labelledby="discover-title"><div className="section-heading"><div>
       <p className="eyebrow">THE CITY, ON YOUR RADAR</p><h2 id="discover-title" tabIndex={-1}>A few nights to explore</h2></div></div>
+      <DemoNotice />
       <DiscoveryFeed />
     </section>
     <section className="promise" id="about-demo"><div><p className="eyebrow">BUILT ON RECEIPTS</p><h2>Every detail<br />has a source.</h2></div>

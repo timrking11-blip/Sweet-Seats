@@ -42,6 +42,9 @@ test('/ renders the coming-soon landing page', () => {
   assert.match(html, /href="https:\/\/github\.com\/timrking11-blip"/);
   assert.match(html, /id="the-idea"/);
   assert.doesNotMatch(html, /Page not found/);
+  assert.match(html, /href="\/"[^>]*>Explore the discovery demo/);
+  assert.match(html, /No connected waitlist/);
+  assert.doesNotMatch(html, /<form|<input|Join the waitlist/);
 });
 
 test('unknown routes render the original 404 with a base-aware home link', () => {
