@@ -25,7 +25,13 @@ function load(file) {
   m.filename = filename;
   m.paths = Module._nodeModulePaths(path.dirname(filename));
   cache.set(filename, m);
-  m.require = (id) => (id.startsWith('.') ? load(path.resolve(path.dirname(filename), id + (path.extname(id) ? '' : '.tsx'))) : require(require.resolve(id, { paths: [path.dirname(filename)] })));
+  m.require = (id) => {
+    if (!id.startsWith('.')) return require(require.resolve(id, { paths: [path.dirname(filename)] }));
+    const request = path.resolve(path.dirname(filename), id);
+    const resolved = path.extname(request) ? request : ['.tsx', '.ts', '.js'].map((ext) => request + ext).find((candidate) => fs.existsSync(candidate));
+    if (!resolved) throw new Error(`Cannot resolve ${id} from ${filename}`);
+    return load(resolved);
+  };
   m._compile(out, filename);
   return m.exports;
 }
@@ -43,6 +49,8 @@ test('/ renders the coming-soon landing page', () => {
   assert.match(html, /id="the-idea"/);
   assert.doesNotMatch(html, /Page not found/);
   assert.match(html, /href="\/"[^>]*>Explore the discovery demo/);
+  assert.match(html, /class="ss-button ss-button--primary/);
+  assert.match(html, /class="ss-link/);
   assert.match(html, /No connected waitlist/);
   assert.doesNotMatch(html, /<form|<input|Join the waitlist/);
 });

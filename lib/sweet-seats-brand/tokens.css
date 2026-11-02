@@ -1,0 +1,30 @@
+/* Canonical SS-BRAND-UI-1.1 source; both web apps import this file directly. */
+:root {
+  --ss-font-body: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --ss-font-display: var(--ss-font-body);
+  --ss-space-1: 4px; --ss-space-2: 8px; --ss-space-3: 12px;
+  --ss-space-4: 16px; --ss-space-6: 24px; --ss-space-8: 32px;
+  --ss-space-12: 48px; --ss-space-16: 64px; --ss-space-24: 96px;
+  --ss-radius-control: 12px; --ss-radius-card: 16px; --ss-radius-pill: 999px;
+  --ss-target-min: 44px;
+  --ss-duration-fast: 120ms; --ss-duration-normal: 180ms;
+  --ss-container-marketing: 1250px; --ss-container-app: 1120px; --ss-container-reading: 720px;
+}
+[data-ss-brand="midnight-session"] {
+  color-scheme: dark;
+  --ss-bg: #031126;
+  --ss-surface: #0D2038;
+  --ss-surface-raised: #162D47;
+  --ss-text: #FFF1DD;
+  --ss-muted: #B7C3D1;
+  --ss-primary: #FF624D;
+  --ss-on-primary: #031126;
+  --ss-accent: #67BCAF;
+  --ss-on-accent: #031126;
+  --ss-control-border: #72849A;
+  --ss-divider: #2A3E56;
+  --ss-focus: #67BCAF;
+  --ss-success: #91D4AA;
+  --ss-warning: #F1CC77;
+  --ss-error: #FFB1A8;
+}

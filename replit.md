@@ -43,6 +43,14 @@ See `README.md` and `docs/contracts/` for original product scope and contracts; 
 - Active frontends are React + TypeScript + Vite with Wouter. Discovery stays at `/`; the separate Lovable brand page stays at `/coming-soon/`. Unknown discovery routes render an accessible client-side not-found page (the development SPA server can still return HTTP 200 for its HTML shell).
 - The coming-soon site is a one-time source import from `timrking11-blip/sweet-seats-coming-soon`, not ongoing synchronization with Lovable. Original assets and reference source remain preserved; no waitlist is connected.
 - Base44 provenance is unverified: no Base44 import, SDK, or project reference has been identified in the inspected sources. Do not describe the Next.js/Python discovery port as a confirmed Base44 import.
-- Both frontends retain their existing visual direction. `docs/brand-ui-proposal.md` inventories them and proposes a shared specification for review; it is not an approved or applied redesign.
+- The supplied SS-BRAND-UI-1.1 navy/cream/coral/teal direction supersedes `docs/brand-ui-proposal.md`. Increment A introduces a shared web foundation while preserving page layouts and original reference artwork. See `docs/foundation-review.md` for actual acceptance evidence; final logo assets and B–E remain separate.
 - This is not live-user ready. Launch prerequisites include owner-approved durable multi-user storage and migrations; configured and verified authentication/account UI and authorization; permitted live data with provenance/freshness validation; separately implemented saved events, follows and consent-based alert management; approved ticket-link behavior and any purchasing integration; and accessibility/device, operational, privacy/security, and production-readiness review.
 - Never infer deployment, live provider activation, account readiness, or a production database from a working synthetic preview. See `docs/repair-validation.md` for actual repair evidence and remaining limits.
+
+## Shared web foundation
+
+- Both Vite entry points directly consume framework-neutral TypeScript and CSS from `lib/sweet-seats-brand/`; no additional package/registry is required. Verify both leaf typechecks and builds whenever this source changes.
+- Shared colors are canonical semantic tokens scoped by `data-ss-brand="midnight-session"`. Local CSS/Tailwind names should alias these rather than duplicating the palette.
+- `/style-guide` is development-only and must not become a production route. Its controls are labeled examples, not connected forms/features.
+- Existing marks are provisional until the actual flat navy headphone-and-seat reference is transferred; never claim final vector/optical/transparent exports already exist.
+- Web-foundation acceptance is separate from full-repository/mobile/workflow/deployment readiness. Preserve real-clock staleness and all synthetic/feature-availability disclosures.

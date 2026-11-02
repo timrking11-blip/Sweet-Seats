@@ -1,6 +1,6 @@
 # Sweet Seats: next buildout plan
 
-Planning-only review, 2026-11-02. No implementation or publishing authorized by this document.
+Planning review, 2026-11-02, revised after owner feedback. Increment A is the only approved execution scope; B–E remain roadmap items. See `docs/foundation-review.md` for actual increment A implementation and acceptance evidence. This document does not authorize publishing.
 
 ## Recommendation: the smallest useful next increment
 
@@ -8,7 +8,7 @@ Planning-only review, 2026-11-02. No implementation or publishing authorized by 
 
 Do not combine this with new search APIs, account setup, database work, live providers, forms or alerts. Review the foundation before adapting the marketing and discovery layouts.
 
-The uploaded package supersedes `docs/brand-ui-proposal.md` for visual direction. The latest flat navy logo **is not in the ZIP**: its README explicitly says the image was saved separately. Ask for that actual reference before drawing/exporting production logo variants. Token and style-guide planning can proceed without it; do not invent a replacement mark.
+The uploaded package supersedes `docs/brand-ui-proposal.md` for visual direction. First look for the previously created “Flat Sweet Seats logo in navy.png” in existing project materials. It was not found in the inspected materials and is not in the ZIP; its README explicitly says the image was saved separately. Request a transfer before drawing/exporting production logo variants. Tokens, shared controls and the guide may proceed with the existing explicitly provisional marks. Final logo production is separate from A's completion.
 
 The new Expo companion is already merged. Preserve it and its API contracts; do not build another native app as part of this website plan.
 
@@ -94,22 +94,22 @@ Today retain visible brand↔demo links. Add Discover/Following/Saved navigation
 
 ## 4. Implementation increments, file sequence and acceptance
 
-Proposed files below do not yet exist unless described above. Each increment needs separate approval and a fresh concurrency check.
+File paths below describe the implementation sequence; A's actual paths/results are recorded in the foundation review. Each subsequent increment needs separate approval and a fresh concurrency check.
 
 ### A — Shared visual foundation (recommended first)
 
-1. Preserve ZIP/reference assets; confirm the flat navy logo reference. Do not regenerate the logo from prose.
+1. Preserve ZIP/reference assets; search existing materials for the flat navy logo, requesting transfer only if unavailable. Do not regenerate the logo from prose or block the token/control/guide work on final asset production.
 2. Add `lib/sweet-seats-brand/tokens.css` as the single semantic source, based on supplied CSS. Scope with `data-ss-brand="midnight-session"`; do not duplicate hex palettes in both apps.
-3. Add a small shared web layer such as `lib/sweet-seats-brand/web.tsx` and `web.css`: brand lockup, native link/button styles, labeled form control examples, focus/status patterns. Use existing React/Lucide/tooling. Direct source/CSS imports are sufficient initially; no new registry or Storybook.
-4. Import tokens through both existing `src/main.tsx` entry points. Map existing discovery variables/Tailwind semantic aliases to the canonical source; do not duplicate token values or couple the backend/mobile runtime to CSS.
+3. Establish shared consumption **before** expanding primitives: both existing `src/main.tsx` entry points directly import `../../../lib/sweet-seats-brand/foundation` and `tokens.css`. Vite already handles workspace source imports; both leaf TypeScript checks include the imported source. Framework-neutral TypeScript plus native semantic markup/shared CSS avoids React module-resolution and new packaging infrastructure. Verify both typechecks and builds at this point.
+4. Add a small shared web layer (`controls.css` and shared navigation metadata): provisional brand lockup treatment, native link/button styles, labeled form examples and focus/status patterns. Map existing discovery variables/Tailwind semantic aliases to the canonical source. No duplicated palette, new registry, Storybook, package or backend/mobile CSS coupling.
 5. Add `artifacts/sweet-seats/src/pages/style-guide.tsx` and a development-only route in `App.tsx`. Extend the current test harness to handle the development flag and verify production excludes this route.
-6. Prepare logo variants only after the actual reference is supplied: stacked/horizontal, simplified 16–32 px symbol, transparent PNG 1×/2×, clean SVG master with outlined wordmark, monochrome/reversed, favicon 16/32, app icons 192/512. Review optical simplification; do not claim a raster concept is a vector master.
+6. Deliver a review artifact: screenshots of both frontends and the development guide, a short list of intentional typography/color/control changes, actual checks and unresolved issues. Final logo production is a separate later item after the reference is supplied: stacked/horizontal, optical symbol, PNG/SVG/monochrome/favicon/app-icon variants. It does not gate A acceptance.
 
 Acceptance: both web frontends consume one token source; navy/cream/coral/teal and sans-serif direction are reviewable in the guide; no glow; coral buttons use tested navy labels; normal/error/warning/focus/disabled states are visually distinct and text-labeled. Existing page content, API contract, routes, reciprocal links, search, timestamps and demo limitations remain intact. Keep page-layout regeneration out of this increment.
 
 Verify: both existing frontend tests/typechecks/builds; targeted guide/nav/semantic-token checks; one visual pass across 320/390/768/1024/1440 widths, keyboard focus, long strings, contrast and reduced-motion preference. Reuse solid-color calculations but test rendered states. Shared typography/colors may change intentionally; do not change discovery logic.
 
-Dependency: logo approval blocks final logo assets only; web foundation can proceed with the existing explicitly temporary mark. Mobile uses React Native styles, not CSS: defer matching native constants until a later targeted alignment, without inventing automatic CSS sharing.
+Dependency: logo approval blocks final logo assets only; web foundation can proceed with the existing explicitly temporary mark. Mobile uses React Native styles, not CSS: defer matching native constants until a later targeted alignment, without inventing automatic CSS sharing. Existing mobile typecheck and managed-workflow failures have separate maintenance ownership and release gates, recorded in the review; passing A's web checks does not mean the repository or deployment is healthy.
 
 ### B — Public website
 
@@ -123,11 +123,11 @@ Verify: existing two route tests extended for the approved branding/CTA, typeche
 
 Adapt `artifacts/sweet-seats/src/app/page.tsx`, `discovery.tsx`, `events/event-page.tsx`, `demo-notice.tsx` and `globals.css` using A. Split the large discovery file into focused feed/detail/filter modules only as touched, retaining existing exports/tests or intentionally updating imports.
 
-Start with date/location filters over loaded results, explicitly page-scoped. Extract a pure filter helper such as `src/app/discovery-filters.ts`; preserve timezone/DST/TBA. If whole-feed search is wanted, plan a separate contract change in `services/api/app/main.py: events`, `lib/api-spec/openapi.yaml`, generated client and all consumers. Do not silently change pagination totals or call page filtering global search.
+Start with date/location filters over loaded results, explicitly page-scoped. Display “Filtering this page’s N events,” retain pagination while filters are active, and use “No matches on this page” rather than implying an empty catalog. Explain that another page may contain matches. Extract a pure filter helper such as `src/app/discovery-filters.ts`; preserve timezone/DST/TBA. If whole-feed search is wanted, plan a separate contract change in `services/api/app/main.py: events`, `lib/api-spec/openapi.yaml`, generated client and all consumers. Do not silently change pagination totals or call page filtering global search.
 
 Acceptance: useful no-match/clear-filter recovery; cancellation, source health, stale evidence and sold-out remain separate; long names wrap; unknown times stay TBA; identities under review remain explicit. Refresh does not change observed timestamps. Preserve loading, empty, partial, unavailable, blocked and missing-event behavior.
 
-Verify: pure filter tests for date boundaries/DST/TBA and combinations, existing render tests and browser smoke (`scripts/sweet-seats-smoke.mjs`) extended with filters/clear. Only rerun Python/API contract tests if those contracts change.
+Verify: pure filter tests for date boundaries/DST/TBA and combinations, active-filter pagination and predictable reset/preservation when changing pages, existing render tests and browser smoke (`scripts/sweet-seats-smoke.mjs`) extended with filters/clear. Only rerun Python/API contract tests if those contracts change.
 
 Spec tension to resolve: Base44 uses a fixed demo clock; Replit currently evaluates real observation freshness against the current clock. Default: retain true current-clock stale behavior. Any fixed illustrative clock must be explicit and separate, not reset old observation timestamps.
 
@@ -143,20 +143,18 @@ Acceptance: save/follow then reload; remove then reload; counts consistent acros
 
 Verify: service/storage unit tests including denied/quota/corrupt storage and restart/reset; one focused interactive pass for save/remove/reload, rollback/concurrency and current status retention. Keep all sample data labeled. No server account writes or notification permissions.
 
-### E — Live account, data and alert readiness
+### E — Independently scoped live-readiness increments
 
-Separate scoping gates, not an extension of a style change:
+These are separate deliverables, not one chain and not an extension of a style change:
 
-1. Review existing Supabase verification/RLS/account contracts, selected signing algorithm support, session expiry and deletion. Reuse `auth.py`, `me.py` and approved migrations; no automatic auth-provider substitution.
-2. Obtain approval for durable multi-user storage, migration/rollback and explicit device-demo→account import semantics. Event-save schema/API is additional work, not implied by existing artist follows.
-3. Verify account isolation/authorization and failed mutation recovery before enabling account controls.
-4. Activate sources only after approved collect/display/retain permissions, identity mappings, server-side credentials, expiry/revocation and source-failure semantics are tested.
-5. Review `alerts.py` eligibility/consent/revocation/lease/retry/outbox logic against real infrastructure. Add channel-specific verified consent, quiet hours, deletion/revocation, observability and operational recovery. A queued job is not a delivered notification.
-6. Only then consider a genuine beta form or real notifications, each with its own operational acceptance.
+| Increment | Files/seams and dependencies | Acceptance and verification |
+|---|---|---|
+| E1 Account persistence | Review `auth.py`, `me.py`, Supabase signing/RLS, approved durable storage/migrations, deletion and explicit device-demo→account import semantics. Event saves require additional schema/API work. No auth-provider substitution. | Verified sign-in/session expiry, isolated users, account-backed follow/save persistence, failed-mutation recovery and deletion; disposable PostgreSQL/RLS tests and targeted authenticated UI pass. No cross-user data access. |
+| E2 Permitted live discovery | Existing source registry/adapters, stable identities, approved collect/display/retain rights, server-side configuration and operational scheduling. Does not require E1 for public discovery if permission permits. | Correct provenance/freshness, expiry/revocation withholding, distinct source errors and cancellation states; adapter/permission tests and approved-environment recovery checks. A key or pending license is insufficient. |
+| E3 Notification delivery | Review `alerts.py` and durable eligibility/outbox/leases/retries; requires verified recipient identity, channel-specific consent, revocation/quiet hours and permitted event evidence. Account integration normally depends on E1; live messages depend on E2 or another explicitly permitted data source. | No delivery from Follow alone, correct consent/revocation/deletion, idempotent durable sends and recovery, queued distinct from delivered; transport mocks first and separately authorized live tests only. |
+| E4 Optional beta intake | Approved storage destination, privacy/retention notice, consent scope, server validation/rate limits and success/error handling. Can be delivered independently of E1–E3; it need not wait for alert delivery. | Real submission recorded once, invalid/failed submissions recover truthfully, deletion/retention behavior verified, no automatic alert subscription or fake success state. Focused endpoint/form tests. |
 
-Acceptance: no cross-user data access; explicit privacy/storage scope; correct consent lifecycle; revoked access withheld immediately; provider errors remain distinct; durable idempotent delivery/recovery and cancellation updates verified in an approved environment. No production migration or real send merely to demonstrate readiness.
-
-Verify: existing Python suites and disposable PostgreSQL/RLS tests; targeted authenticated UI tests after approved test accounts/infrastructure exist; delivery transport mocks before any separately authorized live test. Do not call a successful anonymous GET “account readiness.”
+Each needs separate owner approval and operational review. No production migration or real send merely to demonstrate readiness; no successful anonymous GET is “account readiness.”
 
 ## 5. Baseline results from this planning pass
 
@@ -188,7 +186,10 @@ These are engineering effort bands, **not credit quotes, billing guarantees or d
 | B: public site adaptation | 0.5–1 day | Responsive refinement, accessible artwork, changed marketing copy |
 | C: discovery UI + loaded-page filters | 1–2 days | State preservation, dates/DST, test coverage; global API search adds scope |
 | D: device-local Follow/Save | 2–4 days after usable export; more if rebuilding | Identity mapping, rollback/races, storage failure and integration tests |
-| E: live-user readiness | 5–10+ days, to re-estimate after infrastructure/permissions review | Auth/RLS, licensed sources, durable consent/delivery, migrations and operational recovery |
+| E1: account persistence | 2–4+ days after infrastructure approval | Auth/RLS, migrations, isolation and deletion |
+| E2: permitted live discovery | 2–4+ days per initial approved source | Rights, identity mapping, scheduling and recovery |
+| E3: notification delivery | 2–4+ days after recipient/data/consent prerequisites | Durable delivery, revocation, retries and operational recovery |
+| E4: optional beta intake | 0.5–1.5 days with an approved destination | Validation, scoped consent, retention and genuine success/error behavior |
 
 Do one coherent change and verification pass per approved increment. Reuse current frameworks, components, artwork, fixtures, contracts and tests. Avoid parallel full-app rebuilds, whole Base44 runtime imports, new registries/Storybook, repeated broad browser tests, or generating media before logo approval. Recheck current failures and queued-agent work before spending on implementation.
 
@@ -202,7 +203,7 @@ Do one coherent change and verification pass per approved increment. Reuse curre
 | Search scope | Loaded-page date/location filters first, clearly labeled | Whole-feed search only |
 | Follow/Save persistence | Device-local synthetic mode first, no account or notification claim | Approval before D |
 | Base44 source access | Upload the selective code/test export; do not assume public URL grants code access | Verbatim service reuse; not A–C |
-| Beta geography | NYC five boroughs + Hudson County is supported by `docs/superpowers/specs/2026-10-27-nyc-audience-audit-design.md`; keep public “NYC & nearby” until current owner approval confirmed | Geographic eligibility enforcement, not current marketing |
+| Beta geography | Carry forward five boroughs + Hudson County **event catchment** from the authoritative area's v1 table in `docs/superpowers/specs/2026-10-27-nyc-audience-audit-design.md`. That record separately limits eligible audience to NYC five boroughs. Do not conflate them or re-ask unless records conflict/scope changes. | New geographic enforcement only; not A |
 | Demo clock | Keep current real-clock staleness; never make old evidence fresh | Optional new fixed-clock demo scenarios |
 | Live accounts/providers/alerts | Separate approvals, original backend and licensed contracts first | E only |
 | Pending style/video work | Align its brief to this package before implementation/media generation | Avoids conflicting branding and duplicate credit use |
@@ -223,4 +224,4 @@ Do one coherent change and verification pass per approved increment. Reuse curre
 >
 > Retain page-scoped search, original timestamps/stale warnings, truthful refresh explanation, synthetic-demo disclosures, no-connected-waitlist wording and explicit missing account/ticketing capabilities. Do not add fake controls, live providers, forms, auth, persistence, schema changes, new registry dependencies, frameworks, another mobile app, pushes or publishing. Do not edit the merged Expo app or repair unrelated mobile/workflow issues without separate approval.
 >
-> Run both web frontend test suites, typechecks and builds with their declared artifact settings. Add focused assertions for shared source/guide production exclusion/navigation. Perform one visual/accessibility pass at 320/390/768/1024/1440 widths plus keyboard focus, reduced motion, long text and rendered contrast; extend existing smoke checks only for changed interactions. Record actual pass/fail/blocked results, diff and unresolved logo/accessibility requirements. Finish with a reviewable foundation before moving to B or C.
+> First establish and verify direct shared TypeScript/CSS consumption through existing Vite/workspace source imports in both frontends before expanding primitives. Run both web frontend test suites, typechecks and builds with their declared artifact settings. Add focused assertions for shared source/guide production exclusion/navigation. Perform one visual/accessibility pass at 320/390/768/1024/1440 widths plus keyboard focus, reduced motion, long text and rendered contrast; extend existing smoke checks only for changed interactions. Record existing mobile typecheck and managed-workflow failures separately from new regressions, with separate maintenance follow-ups. Deliver the diff, actual check results, screenshots of both frontends and guide, intentional color/typography changes and unresolved logo/accessibility requirements. Passing web-foundation acceptance does not imply repository-wide or deployment readiness. Stop after A for review; final logo production and B–E are not part of A.

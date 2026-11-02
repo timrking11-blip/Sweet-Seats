@@ -1,20 +1,21 @@
 
 import { DiscoveryFeed } from "./discovery";
 import DemoNotice from "./demo-notice";
+import { brandNavigation } from "../../../../lib/sweet-seats-brand/foundation";
 
 export default function Home() {
   return <main id="main-content">
     <a className="skip-link" href="#discover-title">Skip to events</a>
     <nav className="topbar" aria-label="Primary navigation">
       <a className="brand" href="/" aria-label="Sweet Seats home"><span className="brand-mark">S</span><span>sweet seats</span></a>
-      <div className="nav-actions"><span className="demo-label">LOCAL DISCOVERY DEMO</span><a className="text-button" href="/coming-soon/">About Sweet Seats</a></div>
+      <div className="nav-actions"><span className="demo-label">LOCAL DISCOVERY DEMO</span><a className="text-button ss-link" href={brandNavigation.publicSite.href}>{brandNavigation.publicSite.label}</a></div>
     </nav>
     <section className="hero" id="top">
       <div className="hero-copy"><p className="eyebrow">NEW YORK · LIVE MUSIC</p>
         <h1>Catch the nights<br />you&apos;d hate to miss.</h1>
         <p className="hero-text">Small rooms. Big nights. Find your next show, with a clear trail back to where every detail came from.</p>
-        <div className="hero-actions"><a className="primary button-link" href="#discover-title">Explore the demo <span aria-hidden="true">↗</span></a>
-          <a className="secondary button-link" href="#about-demo">About this preview</a></div>
+        <div className="hero-actions"><a className="primary button-link ss-button ss-button--primary" href="#discover-title">Explore the demo <span aria-hidden="true">↗</span></a>
+          <a className="secondary button-link ss-button ss-button--quiet" href="#about-demo">About this preview</a></div>
       </div>
       <div className="hero-art" aria-hidden="true"><div className="orb orb-one" /><div className="orb orb-two" /><div className="orb orb-three" />
         <div className="ticket-fragment ticket-top">YOUR CITY<br /><strong>LIVE</strong></div>

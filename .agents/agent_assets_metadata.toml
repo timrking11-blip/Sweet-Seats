@@ -14,3 +14,59 @@ mtime_ms = 1793603175350
 storage_uri = "gcs://replit-rams-assets-worf/rams/assets/repl:48fefa5e-c86c-4ba8-ab95-677f45aa8c4a/e7804e82-cf65-4a81-96c6-71c7373fe2f7/4d340e43-e360-4439-9128-c243e2f70090"
 storage_version_token = "1793603198429164"
 content_type = "text/markdown"
+
+[[outputs]]
+id = "h2kWnNrnB9DDkoTem0fWv"
+uri = "file://docs/foundation-review.md"
+type = "text"
+title = "Increment A — Review and Test Evidence"
+description = "Implemented scope, mobile/workflow history, actual pass/fail evidence, screenshots and remaining readiness limits."
+logical_id = "d14cbcba-a37a-4401-828d-4eb8125243a8"
+content_hash = "sha256:eda646339996844dae6c269685510303a0a39b1510c245ca602e30a9a3d7da1f"
+size = 8683
+mtime_ms = 1793605046642
+storage_uri = "gcs://replit-rams-assets-worf/rams/assets/repl:48fefa5e-c86c-4ba8-ab95-677f45aa8c4a/d14cbcba-a37a-4401-828d-4eb8125243a8/ebceaefe-0864-482d-afa5-6528c28d990f"
+storage_version_token = "1793605102697772"
+content_type = "text/markdown"
+
+[[outputs]]
+id = "8to_RRG-7oMOUnoMCMm9P"
+uri = "file://generated-artifacts/foundation/guide-1440.png"
+type = "image"
+title = "Shared Style Guide at 1440 px"
+description = "Full-page development-only foundation guide, including palette, typography, provisional marks, controls and status states."
+logical_id = "79cb1cdb-c4f0-47ba-a5e9-96eda8e194fa"
+content_hash = "sha256:d6e984bc3b5bccb78a414b0ee03f7f13c505105a09b77ab900f084e191a3ec9b"
+size = 276669
+mtime_ms = 1793605008275
+storage_uri = "gcs://replit-rams-assets-worf/rams/assets/repl:48fefa5e-c86c-4ba8-ab95-677f45aa8c4a/79cb1cdb-c4f0-47ba-a5e9-96eda8e194fa/ed357ed6-2ae2-489c-8da1-48d89b3bb078"
+storage_version_token = "1793605103390760"
+content_type = "image/png"
+
+[[outputs]]
+id = "H1yRZYxWTeIY6zRs_rsnU"
+uri = "file://generated-artifacts/foundation/discovery-390.png"
+type = "image"
+title = "Discovery on a 390 px viewport"
+description = "Full-page responsive discovery preview using the shared foundation; original synthetic-data and freshness disclosures are retained."
+logical_id = "ba8de940-8fce-4cf9-b95a-56794732cd4c"
+content_hash = "sha256:4a1bd2a037756f411d9d25c9b21111b8a55408c2da1b3167f2c295768bb87092"
+size = 312751
+mtime_ms = 1793604897762
+storage_uri = "gcs://replit-rams-assets-worf/rams/assets/repl:48fefa5e-c86c-4ba8-ab95-677f45aa8c4a/ba8de940-8fce-4cf9-b95a-56794732cd4c/6c4617b3-24df-4781-878a-32bc507204d9"
+storage_version_token = "1793605103833858"
+content_type = "image/png"
+
+[[outputs]]
+id = "krL0B06J5IGxfMdtUaEpe"
+uri = "file://generated-artifacts/foundation/public-1440.png"
+type = "image"
+title = "Public site at 1440 px"
+description = "Full-page responsive public Sweet Seats site using the shared foundation and linking to the discovery demo."
+logical_id = "cf112695-b09d-4b51-869b-47d1434ad13e"
+content_hash = "sha256:585ed71be3f17ba54e4fe687fc6d423002a5a7a1d3575ac4f3df0f6e5081db2e"
+size = 265033
+mtime_ms = 1793604905194
+storage_uri = "gcs://replit-rams-assets-worf/rams/assets/repl:48fefa5e-c86c-4ba8-ab95-677f45aa8c4a/cf112695-b09d-4b51-869b-47d1434ad13e/6712fc20-eaf2-462b-adca-be4b36cb07f8"
+storage_version_token = "1793605104296141"
+content_type = "image/png"

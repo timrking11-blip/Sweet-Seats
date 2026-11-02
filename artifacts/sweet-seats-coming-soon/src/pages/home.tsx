@@ -1,3 +1,5 @@
+import { brandNavigation } from "../../../../lib/sweet-seats-brand/foundation";
+
 const GH = "https://github.com/timrking11-blip";
 const BASE = import.meta.env.BASE_URL;
 
@@ -36,7 +38,7 @@ function Poster() {
           <span>ADMIT: YOU</span>
         </div>
         <p className="mt-5 text-3xl font-black leading-none tracking-tight sm:text-4xl">YOUR NEXT</p>
-        <p className="mt-1 font-serif text-2xl italic sm:text-3xl">“I was there.”</p>
+        <p className="mt-1 font-sans text-2xl font-bold sm:text-3xl">“I was there.”</p>
         <p className="mt-3 text-xs font-medium">For the love of live music.</p>
         <div className="my-4 border-t-2 border-dashed border-ink/50" />
         <div className="flex items-end justify-between gap-3">
@@ -66,10 +68,10 @@ export default function Index() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className={`${wrap} flex items-center justify-between py-6`}>
-        <a href={BASE} className="flex items-center">
+        <a href={brandNavigation.publicSite.href} className="flex min-h-11 items-center" aria-label="Sweet Seats home">
           <img src={`${BASE}sweet-seats-logo.svg`} alt="Sweet Seats home" className="h-8 w-auto sm:h-9" width="173" height="32" />
         </a>
-        <a href={GH} target="_blank" rel="noopener noreferrer" className="text-sm text-soft hover:text-foreground">
+        <a href={GH} target="_blank" rel="noopener noreferrer" className="ss-link flex min-h-11 items-center text-sm">
           Meet the founder ↗<span className="sr-only"> (opens in new tab)</span>
         </a>
       </header>
@@ -90,8 +92,8 @@ export default function Index() {
             </p>
             <div className="mt-10 flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-6">
               <a
-                href="/"
-                className="inline-flex w-fit items-center rounded-full bg-foreground px-6 py-3 text-sm font-bold text-ink transition-opacity hover:opacity-90"
+                href={brandNavigation.discovery.href}
+                className="ss-button ss-button--primary w-fit"
               >
                 Explore the discovery demo →
               </a>
@@ -121,7 +123,7 @@ export default function Index() {
           <ol className="divide-y divide-rule border-y border-rule">
             {ideas.map(([n, t, d]) => (
               <li key={n} className="flex gap-6 py-7">
-                <span className="font-serif text-xl italic text-coral">{n}</span>
+                <span className="font-sans text-xl font-bold text-coral">{n}</span>
                 <div>
                   <h3 className="text-xl font-bold tracking-tight">{t}</h3>
                   <p className="mt-2 leading-relaxed text-soft">{d}</p>

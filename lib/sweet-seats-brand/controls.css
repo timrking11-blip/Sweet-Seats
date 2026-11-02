@@ -1,0 +1,84 @@
+/* Shared native-control primitives for the Sweet Seats web surfaces. */
+[data-ss-brand="midnight-session"] {
+  font-family: var(--ss-font-body);
+  color: var(--ss-text);
+}
+
+.ss-link {
+  display: inline-flex;
+  min-height: var(--ss-target-min);
+  align-items: center;
+  color: var(--ss-accent);
+  font-weight: 700;
+  text-underline-offset: 0.2em;
+  text-decoration-thickness: 1px;
+}
+
+.ss-link:hover { text-decoration-thickness: 2px; }
+
+.ss-button {
+  display: inline-flex;
+  min-height: var(--ss-target-min);
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  border: 1px solid var(--ss-control-border);
+  border-radius: var(--ss-radius-pill);
+  padding: 0.65rem 1.15rem;
+  background: var(--ss-surface);
+  color: var(--ss-text);
+  font: 700 0.9rem/1.2 var(--ss-font-body);
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--ss-duration-fast), border-color var(--ss-duration-fast), color var(--ss-duration-fast), transform var(--ss-duration-fast);
+}
+
+.ss-button:hover:not(:disabled) { transform: translateY(-1px); border-color: var(--ss-accent); }
+.ss-button:active:not(:disabled) { transform: translateY(0); }
+.ss-button--primary { border-color: var(--ss-primary); background: var(--ss-primary); color: var(--ss-on-primary); }
+.ss-button--primary:hover:not(:disabled) { border-color: var(--ss-primary); background: var(--ss-text); color: var(--ss-bg); }
+.ss-button--quiet { background: transparent; }
+.ss-button:disabled, .ss-button[aria-disabled="true"] { cursor: not-allowed; opacity: 0.58; transform: none; }
+
+.ss-control {
+  display: block;
+  width: 100%;
+  min-height: var(--ss-target-min);
+  border: 1px solid var(--ss-control-border);
+  border-radius: var(--ss-radius-control);
+  padding: 0.7rem 0.9rem;
+  background: var(--ss-surface);
+  color: var(--ss-text);
+  font: 500 1rem/1.4 var(--ss-font-body);
+}
+
+.ss-control::placeholder { color: var(--ss-muted); opacity: 1; }
+.ss-label { display: block; margin-bottom: 0.45rem; color: var(--ss-text); font-weight: 700; }
+.ss-help { margin: 0.4rem 0 0; color: var(--ss-muted); font-size: 0.875rem; line-height: 1.5; }
+
+.ss-status {
+  border: 1px solid var(--ss-divider);
+  border-left: 4px solid var(--ss-accent);
+  border-radius: 0 var(--ss-radius-control) var(--ss-radius-control) 0;
+  padding: 0.9rem 1rem;
+  background: var(--ss-surface);
+  color: var(--ss-text);
+  line-height: 1.55;
+}
+.ss-status[data-tone="warning"] { border-left-color: var(--ss-warning); }
+.ss-status[data-tone="error"] { border-left-color: var(--ss-error); }
+.ss-status[data-tone="success"] { border-left-color: var(--ss-success); }
+
+.ss-button:focus-visible,
+.ss-control:focus-visible,
+.ss-link:focus-visible,
+[data-ss-brand="midnight-session"] :focus-visible {
+  outline: 3px solid var(--ss-focus);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ss-button { transition: none; }
+  .ss-button:hover:not(:disabled) { transform: none; }
+}

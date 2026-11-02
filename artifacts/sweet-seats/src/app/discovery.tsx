@@ -98,18 +98,18 @@ export function DiscoveryFeedView({ result, retry, offset = 0, setOffset = () =>
       .join(" ").toLowerCase().includes(query.trim().toLowerCase()));
   return <>
     <div className="feed-tools">
-      <label htmlFor="event-search">Find an artist, venue, or neighborhood on this page
-        <input id="event-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Try Violet Static or Brooklyn" />
+        <label className="ss-label" htmlFor="event-search">Find an artist, venue, or neighborhood on this page
+        <input className="ss-control" id="event-search" type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Try Violet Static or Brooklyn" />
       </label>
       <div className="refresh-control">
-        <button className="secondary" aria-describedby="refresh-note" onClick={retry}>Refresh feed</button>
+        <button className="secondary ss-button ss-button--quiet" aria-describedby="refresh-note" onClick={retry}>Refresh feed</button>
         <p id="refresh-note">Reloads stored observations only. Does not collect live events or update observation freshness.</p>
       </div>
     </div>
-    {data.status === "partial" && <p className="data-warning" role="status">A source failed. Previously observed events remain available; their timestamps have not been refreshed.</p>}
-    {data.status === "unavailable" && <p className="data-warning" role="alert">Source unavailable. This is a collection failure, not evidence of no events or sold-out tickets.</p>}
-    {data.status === "blocked" && <p className="data-warning" role="alert">Events are withheld because source permissions do not allow display or retention.</p>}
-    {data.review_count > 0 && <p className="data-warning" role="status">{data.review_count} source record(s) or event(s) withheld for unresolved identities or conflicting facts. Matching needs review.</p>}
+    {data.status === "partial" && <p className="data-warning ss-status" data-tone="warning" role="status">A source failed. Previously observed events remain available; their timestamps have not been refreshed.</p>}
+    {data.status === "unavailable" && <p className="data-warning ss-status" data-tone="error" role="alert">Source unavailable. This is a collection failure, not evidence of no events or sold-out tickets.</p>}
+    {data.status === "blocked" && <p className="data-warning ss-status" data-tone="error" role="alert">Events are withheld because source permissions do not allow display or retention.</p>}
+    {data.review_count > 0 && <p className="data-warning ss-status" data-tone="warning" role="status">{data.review_count} source record(s) or event(s) withheld for unresolved identities or conflicting facts. Matching needs review.</p>}
     {data.unresolved.length > 0 && <details className="collection-details"><summary>Unresolved identities</summary>
       <ul>{data.unresolved.map((record) => <li key={record.source_record_id}>{record.title}: identity crosswalk needs review; no match was guessed.</li>)}</ul>
     </details>}
@@ -134,9 +134,9 @@ export function DiscoveryFeedView({ result, retry, offset = 0, setOffset = () =>
       </article>)}
     </div>
     <nav aria-label="Event pages" className="feed-tools">
-      <button className="secondary" disabled={offset === 0} onClick={() => { setQuery(""); setOffset(Math.max(0, offset - 100)); }}>Previous page</button>
+       <button className="secondary ss-button ss-button--quiet" disabled={offset === 0} onClick={() => { setQuery(""); setOffset(Math.max(0, offset - 100)); }}>Previous page</button>
       <span>{data.pagination.total} total demo events</span>
-      <button className="secondary" disabled={data.pagination.next_offset === null} onClick={() => { setQuery(""); setOffset(data.pagination.next_offset ?? 0); }}>Next page</button>
+       <button className="secondary ss-button ss-button--quiet" disabled={data.pagination.next_offset === null} onClick={() => { setQuery(""); setOffset(data.pagination.next_offset ?? 0); }}>Next page</button>
     </nav>
     <details className="collection-details"><summary>Source collection results</summary>
       <ul>{data.collections.map((collection, i) => <li key={i}>{collection.name}: {collection.status} · {collection.item_count} records · {observedTime(collection.finished_at)}</li>)}</ul>
@@ -147,7 +147,7 @@ export function DiscoveryFeedView({ result, retry, offset = 0, setOffset = () =>
 function Failure({ retry }: { retry: () => void }) {
   return <div className="feed-state" role="alert"><h3>Discovery is unavailable.</h3>
     <p>The local API or fixture store could not be read. We cannot infer event availability from this failure.</p>
-    <button className="secondary" onClick={retry}>Try again</button></div>;
+    <button className="secondary ss-button ss-button--quiet" onClick={retry}>Try again</button></div>;
 }
 
 export function EventDetail({ eventId }: { eventId: string }) {
@@ -155,7 +155,7 @@ export function EventDetail({ eventId }: { eventId: string }) {
   if (result.state === "loading") return <div className="feed-state" role="status">Loading event details…</div>;
   if (result.state === "missing") return <div className="feed-state" role="status"><h1>This event isn&apos;t available.</h1>
     <p>It doesn&apos;t exist, or its sources don&apos;t currently permit display. This says nothing about ticket availability.</p>
-    <a className="secondary button-link" href="/#discover-title">Back to all events</a></div>;
+     <a className="secondary button-link ss-button ss-button--quiet" href="/#discover-title">Back to all events</a></div>;
   if (result.state === "error") return <Failure retry={retry} />;
   const event = result.data.event;
   return <article className="event-detail">
@@ -176,7 +176,7 @@ export function EventDetail({ eventId }: { eventId: string }) {
       </div>)}
     </section>
     <section><h2>Tickets</h2><p>{event.ticket_notice} Official ticket links arrive with a permitted live source.</p>
-      <button className="secondary" disabled>No ticket link in this demo</button></section>
+     <button className="secondary ss-button ss-button--quiet" disabled>No ticket link in this demo</button></section>
   </article>;
 }
 

@@ -6,6 +6,7 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "test:sweet-seats": "node sweet-seats-smoke.mjs",
+    "test:sweet-seats-foundation": "node sweet-seats-foundation-smoke.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
