@@ -1,5 +1,7 @@
 export type CustomFetchOptions = RequestInit & {
   responseType?: "json" | "text" | "blob" | "auto";
+  /** Optional deadline covering response headers and body (including on native). */
+  timeoutMs?: number;
 };
 
 export type ErrorType<T = unknown> = ApiError<T>;
@@ -327,7 +329,7 @@ export async function customFetch<T = unknown>(
   options: CustomFetchOptions = {},
 ): Promise<T> {
   input = applyBaseUrl(input);
-  const { responseType = "auto", headers: headersInit, ...init } = options;
+  const { responseType = "auto", headers: headersInit, timeoutMs, ...init } = options;
 
   const method = resolveMethod(input, init.method);
 
@@ -360,12 +362,20 @@ export async function customFetch<T = unknown>(
 
   const requestInfo = { method, url: resolveUrl(input) };
 
-  const response = await fetch(input, { ...init, method, headers });
-
-  if (!response.ok) {
-    const errorData = await parseErrorBody(response, method);
-    throw new ApiError(response, errorData, requestInfo);
+  const controller = timeoutMs ? new AbortController() : null;
+  const abort = () => controller?.abort();
+  if (controller && init.signal?.aborted) controller.abort();
+  init.signal?.addEventListener("abort", abort, { once: true });
+  const timer = timeoutMs ? setTimeout(abort, timeoutMs) : undefined;
+  try {
+    const response = await fetch(input, { ...init, signal: controller?.signal ?? init.signal, method, headers });
+    if (!response.ok) {
+      const errorData = await parseErrorBody(response, method);
+      throw new ApiError(response, errorData, requestInfo);
+    }
+    return (await parseSuccessBody(response, responseType, requestInfo)) as T;
+  } finally {
+    clearTimeout(timer);
+    init.signal?.removeEventListener("abort", abort);
   }
-
-  return (await parseSuccessBody(response, responseType, requestInfo)) as T;
 }

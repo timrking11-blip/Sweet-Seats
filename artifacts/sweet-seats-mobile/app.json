@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "Sweet Seats Mobile",
+    "slug": "sweet-seats-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/sweet-seats-icon.png",
+    "scheme": "sweet-seats-mobile",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": false
+    },
+    "android": {},
+    "web": {
+      "favicon": "./assets/images/sweet-seats-icon.png",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      ["expo-splash-screen", {
+        "image": "./assets/images/sweet-seats-icon.png",
+        "imageWidth": 180,
+        "backgroundColor": "#100c19"
+      }]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

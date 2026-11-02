@@ -11,6 +11,43 @@ tags:
   - name: health
     description: Health operations
 paths:
+  /discovery/events:
+    get:
+      operationId: getDiscoveryEvents
+      tags: [discovery]
+      summary: List permission-checked synthetic discovery events
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 100 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        "200":
+          description: Synthetic feed including source collection state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiscoveryFeed"
+        "503": { description: Discovery store unavailable }
+  /discovery/events/{eventId}:
+    get:
+      operationId: getDiscoveryEvent
+      tags: [discovery]
+      summary: Get a displayed synthetic event and its provenance
+      parameters:
+        - { name: eventId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Synthetic event detail
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mode, event]
+                properties:
+                  mode: { type: string, enum: [synthetic] }
+                  event: { $ref: "#/components/schemas/DiscoveryEvent" }
+        "404": { description: "Missing or withheld event, not a ticket availability signal" }
+        "422": { description: Invalid event identifier }
+        "503": { description: Discovery store unavailable }
   /healthz:
     get:
       operationId: healthCheck
@@ -26,6 +63,91 @@ paths:
                 $ref: "#/components/schemas/HealthStatus"
 components:
   schemas:
+    DiscoverySource:
+      type: object
+      required: [source_id, source_record_id, source_url, name, observed_at, available_at]
+      properties:
+        source_id: { type: string }
+        source_record_id: { type: string }
+        source_url: { type: string }
+        name: { type: string }
+        observed_at: { type: string }
+        available_at: { type: string }
+    DiscoveryEvent:
+      type: object
+      required: [event_id, title, venue, performers, starts_at, local_date, timezone, time_tba, status, observed_at, available_at, fresh_until, stale, sources, ticket_url, ticket_notice]
+      properties:
+        event_id: { type: string }
+        title: { type: string }
+        venue:
+          type: object
+          required: [venue_id, name, neighborhood, timezone]
+          properties:
+            venue_id: { type: string }
+            name: { type: string }
+            neighborhood: { type: string }
+            timezone: { type: string }
+        performers:
+          type: array
+          items:
+            type: object
+            required: [artist_id, name, role, billing_order]
+            properties:
+              artist_id: { type: string }
+              name: { type: string }
+              role: { type: string }
+              billing_order: { type: integer }
+        starts_at: { type: [string, "null"] }
+        local_date: { type: string }
+        timezone: { type: string }
+        time_tba: { type: boolean }
+        status: { type: string, enum: [scheduled, rescheduled, postponed, cancelled, unknown] }
+        observed_at: { type: string }
+        available_at: { type: string }
+        fresh_until: { type: string }
+        stale: { type: boolean }
+        sources:
+          type: array
+          items: { $ref: "#/components/schemas/DiscoverySource" }
+        ticket_url: { type: "null" }
+        ticket_notice: { type: string }
+    DiscoveryFeed:
+      type: object
+      required: [mode, status, review_count, unresolved, pagination, events, collections]
+      properties:
+        mode: { type: string, enum: [synthetic] }
+        status: { type: string, enum: [ready, empty, partial, unavailable, blocked, review_required] }
+        review_count: { type: integer }
+        unresolved:
+          type: array
+          items:
+            type: object
+            required: [source_record_id, title, reason]
+            properties:
+              source_record_id: { type: string }
+              title: { type: string }
+              reason: { type: string }
+        pagination:
+          type: object
+          required: [limit, offset, total, next_offset]
+          properties:
+            limit: { type: integer }
+            offset: { type: integer }
+            total: { type: integer }
+            next_offset: { type: [integer, "null"] }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/DiscoveryEvent" }
+        collections:
+          type: array
+          items:
+            type: object
+            required: [name, status, finished_at, item_count]
+            properties:
+              name: { type: string }
+              status: { type: string }
+              finished_at: { type: string }
+              item_count: { type: integer }
     HealthStatus:
       type: object
       properties:

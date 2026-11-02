@@ -1,0 +1,24 @@
+kind = "mobile"
+previewPath = "/sweet-seats-mobile/"
+title = "Sweet Seats Mobile"
+description = "Native Sweet Seats companion for exploring synthetic NYC live-music events with search, event details and transparent source provenance."
+version = "1.0.0"
+id = "artifacts/sweet-seats-mobile"
+router = "expo-domain"
+
+[[services]]
+name = "expo"
+ensurePreviewReachable = "/status"
+paths = [ "/sweet-seats-mobile/" ]
+localPort = 25207
+
+[services.development]
+run = "pnpm --filter @workspace/sweet-seats-mobile run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/sweet-seats-mobile", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/sweet-seats-mobile", "run", "serve" ]
+
+[services.env]
+PORT = "25207"
+BASE_PATH = "/sweet-seats-mobile/"

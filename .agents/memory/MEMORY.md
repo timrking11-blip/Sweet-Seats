@@ -1,0 +1,1 @@
+- [Expo compatibility](expo-compatibility.md) — validate scaffold versions and splash configuration against the installed SDK, not older examples.
