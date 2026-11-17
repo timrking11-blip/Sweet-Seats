@@ -89,6 +89,13 @@ jobs:
       - run: pnpm run typecheck
       - run: pnpm --filter @workspace/sweet-seats test
       - run: pnpm --filter @workspace/sweet-seats-coming-soon test
+      # The api-server build runs `uv sync --frozen` for the Python service it starts.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.32"
       - name: Build the web artifacts
         env:
           PORT: "3000"
@@ -99,8 +106,5 @@ jobs:
           --filter ./artifacts/sweet-seats-coming-soon
           --filter ./artifacts/api-server
           run build
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
       - name: Check built client secret boundary
         run: python -m unittest tests.test_frontend_boundary -v
