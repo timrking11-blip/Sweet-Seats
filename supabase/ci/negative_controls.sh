@@ -17,6 +17,7 @@ PERMISSIONS_TEST=supabase/tests/source_permissions_test.sql
 RLS_TEST=supabase/tests/rls_denial_test.sql
 MB_RUNS_TEST=supabase/tests/musicbrainz_collection_runs_test.sql
 WAITLIST_TEST=supabase/tests/waitlist_test.sql
+CONSENT_TEST=supabase/tests/consent_history_test.sql
 mapfile -t MIGRATIONS < <(ls supabase/migrations/*.sql | sort)
 
 failures=0
@@ -237,6 +238,33 @@ run_control "waitlist insertable by authenticated through a policy" \
 run_control "waitlist accepts an unnormalised email" \
   "FAIL an email that is not normalised was accepted" "$WAITLIST_TEST" \
   "" yes "s/check (email = lower(btrim(email))/check (true/"
+
+# Consent history (G-15).
+run_control "consent events can be rewritten" \
+  "FAIL the owner changed a consent event" "$CONSENT_TEST" \
+  "drop trigger consent_events_append_only on public.consent_events;"
+
+run_control "consent events writable by a signed-in user" \
+  "FAIL user A wrote a consent event directly" "$CONSENT_TEST" \
+  "grant insert on public.consent_events to authenticated;
+   create policy consent_events_insert_own on public.consent_events for insert to authenticated
+     with check (user_id = (select auth.uid()));"
+
+run_control "outcome consent under an unregistered copy" \
+  "FAIL outcome consent accepted under an unregistered copy" "$CONSENT_TEST" \
+  "drop trigger user_profiles_require_registered_outcome_copy on public.user_profiles;"
+
+run_control "outcome consent under a retired copy" \
+  "FAIL outcome consent accepted under a retired copy" "$CONSENT_TEST" \
+  "" yes "s/and c.retired_at is null) then/) then/"
+
+run_control "subscription consent not recorded" \
+  "FAIL subscription grant not recorded with its copy hash" "$CONSENT_TEST" \
+  "drop trigger notification_subscriptions_record_consent on public.notification_subscriptions;"
+
+run_control "a user's consent change recorded as the server's" \
+  "FAIL user A sees the wrong consent history" "$CONSENT_TEST" \
+  "" yes "s/when current_setting('role') in ('authenticated', 'anon') then 'user'/when false then 'user'/"
 
 echo "${count} negative controls, ${failures} not caught"
 [ "$failures" -eq 0 ]

@@ -27,6 +27,7 @@ import psycopg
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from . import consent
 from .auth import AuthError, AuthUnavailable, Identity, bearer, configured, verify
 from .discovery import DiscoveryError
 from .discovery_postgres import PostgresStore
@@ -194,6 +195,56 @@ def revoke(subscription_id: UUID, user: User, store: Store) -> dict:
     if row is None:
         raise HTTPException(status_code=404, detail="Subscription not found.")
     return row
+
+
+class ConsentIn(BaseModel):
+    """Grant or withdraw. The version is the server's current copy, never the client's."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    grant: bool
+
+
+@router.get("/consent")
+def consent_state(user: User, store: Store) -> dict:
+    """The copy to show for each optional consent, and this user's full consent history."""
+    with user_session(store, user) as conn:
+        history = conn.execute(
+            """SELECT kind, action, copy_version, copy_sha256, source, created_at
+               FROM public.consent_events ORDER BY created_at, consent_event_id""").fetchall()
+        profile = conn.execute(
+            "SELECT outcome_consent_version FROM public.user_profiles").fetchone()
+    return {
+        "copies": {kind: {"version": c.version, "text": c.text, "sha256": c.sha256}
+                   for kind, c in consent.CURRENT.items()},
+        "current": {"outcomes": (profile or {}).get("outcome_consent_version")},
+        "history": history,
+    }
+
+
+@router.put("/consent/outcomes")
+def put_outcome_consent(body: ConsentIn, user: User, store: Store) -> dict:
+    """Grant outcome consent under the current copy, or withdraw it. The database stamps
+    the time and appends the event; an unregistered or retired copy is refused there."""
+    copy = consent.OUTCOMES
+    with user_session(store, user) as conn:
+        if body.grant:
+            row = conn.execute(
+                """UPDATE public.user_profiles
+                   SET outcome_consent_version = %s, outcome_consent_at = now(), updated_at = now()
+                   WHERE outcome_consent_version IS DISTINCT FROM %s OR outcome_consent_at IS NULL
+                   RETURNING user_id""", (copy.version, copy.version)).fetchone()
+        else:
+            row = conn.execute(
+                """UPDATE public.user_profiles
+                   SET outcome_consent_version = NULL, outcome_consent_at = NULL, updated_at = now()
+                   WHERE outcome_consent_at IS NOT NULL
+                   RETURNING user_id""").fetchone()
+        exists = row is not None or conn.execute(
+            "SELECT 1 FROM public.user_profiles").fetchone() is not None
+    if not exists:
+        raise HTTPException(status_code=409, detail="Create a profile first.")
+    return {"outcomes": copy.version if body.grant else None}
 
 
 def require_recent_sign_in(identity: Identity, now: datetime) -> None:
