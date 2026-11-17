@@ -18,7 +18,7 @@ import json
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
@@ -35,6 +35,10 @@ router = APIRouter(prefix="/v1/me", tags=["me"])
 
 # Run as the API role Supabase gives signed-in users, with only the verified subject.
 ACT_AS_USER = "SET LOCAL ROLE authenticated"
+
+
+# Irreversible account actions need a sign-in this recent (G-16).
+RECENT_SIGN_IN = timedelta(minutes=10)
 
 
 def auth_now() -> datetime:
@@ -192,11 +196,23 @@ def revoke(subscription_id: UUID, user: User, store: Store) -> dict:
     return row
 
 
+def require_recent_sign_in(identity: Identity, now: datetime) -> None:
+    """A stolen but unexpired token must not take an irreversible action (G-16)."""
+    signed_in = identity.authenticated_at
+    if signed_in is None or now - signed_in > RECENT_SIGN_IN:
+        raise HTTPException(
+            status_code=401, detail="Sign in again to continue.",
+            headers={"WWW-Authenticate": 'Bearer error="insufficient_user_authentication", '
+                                         f'max_age="{int(RECENT_SIGN_IN.total_seconds())}"'})
+
+
 @router.post("/deletion-request", status_code=202)
-def request_deletion(user: User, store: Store) -> dict:
+def request_deletion(user: User, store: Store, now: datetime = Depends(auth_now)) -> dict:
     """Record a deletion request, creating the profile row if the account has none.
     From then on no alert is planned or sent, and the profile and follows cannot be
-    changed. Idempotent; the database stamps the time, and the user cannot withdraw it."""
+    changed. Idempotent; the database stamps the time, and the user cannot withdraw it.
+    It needs a sign-in within RECENT_SIGN_IN: an older session must sign in again."""
+    require_recent_sign_in(user, now)
     with user_session(store, user) as conn:
         try:
             with conn.transaction():

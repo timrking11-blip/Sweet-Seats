@@ -20,10 +20,13 @@ pytestmark = pytest.mark.skipif(not os.environ.get("SWEET_SEATS_TEST_DATABASE_UR
                                 reason="requires disposable local PostgreSQL DSN")
 
 
-def bearer(user: str) -> dict:
-    token = mint_token({"sub": user, "role": "authenticated", "aud": "authenticated",
-                        "iss": TEST_ISSUER, "exp": int((NOW + timedelta(hours=1)).timestamp())})
-    return {"Authorization": "Bearer " + token}
+def bearer(user: str, *, signed_in: timedelta | None = timedelta(minutes=1)) -> dict:
+    """A user token; signed_in is how long ago the user last signed in (None: unstated)."""
+    claims = {"sub": user, "role": "authenticated", "aud": "authenticated",
+              "iss": TEST_ISSUER, "exp": int((NOW + timedelta(hours=1)).timestamp())}
+    if signed_in is not None:
+        claims["amr"] = [{"method": "otp", "timestamp": int((NOW - signed_in).timestamp())}]
+    return {"Authorization": "Bearer " + mint_token(claims)}
 
 
 def admin(store):
@@ -210,6 +213,20 @@ def test_an_account_without_a_profile_can_request_deletion(world):
     assert response.status_code == 202 and response.json()["deletion_requested_at"]
     assert client.post("/v1/me/deletion-request",
                        headers=bearer(str(uuid4()))).status_code == 409  # Unknown to Auth.
+
+
+@pytest.mark.parametrize("signed_in", [timedelta(minutes=11), None])
+def test_deletion_needs_a_recent_sign_in(world, signed_in):
+    client, conn, a = world["client"], world["conn"], world["a"]
+    response = client.post("/v1/me/deletion-request", headers=bearer(a, signed_in=signed_in))
+    assert response.status_code == 401
+    assert "insufficient_user_authentication" in response.headers["www-authenticate"]
+    assert conn.execute("SELECT deletion_requested_at FROM user_profiles WHERE user_id = %s",
+                        (a,)).fetchone()["deletion_requested_at"] is None
+    # An old session still reads and edits; only the irreversible action needs a fresh sign-in.
+    assert client.get("/v1/me", headers=bearer(a, signed_in=signed_in)).status_code == 200
+    assert client.post("/v1/me/deletion-request",
+                       headers=bearer(a, signed_in=timedelta(minutes=9))).status_code == 202
 
 
 def test_other_privilege_errors_are_server_faults_not_deletion(world, monkeypatch):

@@ -31,6 +31,14 @@ def test_a_valid_user_token_yields_its_subject():
     assert verify(mint_token(claims(aud=["authenticated", "x"])), CONFIG, NOW)
 
 
+def test_the_latest_authentication_time_is_kept():
+    at = int(NOW.timestamp())
+    amr = [{"method": "password", "timestamp": at - 3600}, {"method": "otp", "timestamp": at - 60}]
+    assert verify(mint_token(claims(amr=amr)), CONFIG, NOW).authenticated_at == NOW - timedelta(minutes=1)
+    assert verify(mint_token(claims(auth_time=at - 30)), CONFIG, NOW).authenticated_at == NOW - timedelta(seconds=30)
+    assert verify(mint_token(claims()), CONFIG, NOW).authenticated_at is None
+
+
 def deep_header() -> str:
     """A header nested deeply enough to exhaust the JSON parser's recursion."""
     import base64
@@ -72,6 +80,13 @@ def flip(token: str, index: int) -> str:
     (mint_token(claims(role="service_role")), "not_a_user_session"),
     (mint_token(claims(is_anonymous=True)), "not_a_user_session"),
     (mint_token(claims(sub="not-a-uuid")), "invalid_subject"),
+    (mint_token(claims(amr="otp")), "invalid_amr"),
+    (mint_token(claims(amr=["otp"])), "invalid_amr"),
+    (mint_token(claims(amr=[{"method": "otp"}])), "invalid_amr"),
+    (mint_token(claims(amr=[{"method": "otp", "timestamp": "yesterday"}])), "invalid_amr"),
+    (mint_token(claims(amr=[{"method": "otp", "timestamp": int(NOW.timestamp()) + 120}])),
+     "invalid_amr"),
+    (mint_token(claims(auth_time=float("nan"))), "invalid_amr"),
     (mint_token(claims(sub=str(uuid4()).upper())), "invalid_subject"),
     (mint_token(claims(exp=float("nan"))), "invalid_exp"),
     (mint_token(claims(exp=float("inf"))), "invalid_exp"),
