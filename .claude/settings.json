@@ -1,0 +1,5 @@
+{
+  "enabledPlugins": {
+    "recoup-catalogs-plugin@anthropic-plugin-directory": false
+  }
+}
