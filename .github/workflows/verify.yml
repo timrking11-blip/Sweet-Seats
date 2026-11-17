@@ -88,6 +88,7 @@ jobs:
         run: pnpm audit --prod
       - run: pnpm run typecheck
       - run: pnpm --filter @workspace/sweet-seats test
+      - run: pnpm --filter @workspace/sweet-seats-coming-soon test
       - name: Build the web artifacts
         env:
           PORT: "3000"

@@ -16,6 +16,7 @@ AUTH=supabase/ci/emulate_supabase_auth.sql
 PERMISSIONS_TEST=supabase/tests/source_permissions_test.sql
 RLS_TEST=supabase/tests/rls_denial_test.sql
 MB_RUNS_TEST=supabase/tests/musicbrainz_collection_runs_test.sql
+WAITLIST_TEST=supabase/tests/waitlist_test.sql
 mapfile -t MIGRATIONS < <(ls supabase/migrations/*.sql | sort)
 
 failures=0
@@ -222,6 +223,20 @@ run_control "finalized run can be finalized again" \
 run_control "artist cached without a collection run" \
   "FAIL cached without a matching succeeded run" "$MB_RUNS_TEST" \
   "" yes "s/raise exception 'musicbrainz_run_required' using errcode = '22023';/null;/"
+
+# Waitlist privacy.
+run_control "waitlist readable by anon" \
+  "FAIL anon holds privileges on waitlist_signups" "$WAITLIST_TEST" \
+  "grant select on public.waitlist_signups to anon;"
+
+run_control "waitlist insertable by authenticated through a policy" \
+  "FAIL waitlist_signups has 1 RLS policies" "$WAITLIST_TEST" \
+  "grant insert on public.waitlist_signups to authenticated;
+   create policy waitlist_open on public.waitlist_signups for insert to authenticated with check (true);"
+
+run_control "waitlist accepts an unnormalised email" \
+  "FAIL an email that is not normalised was accepted" "$WAITLIST_TEST" \
+  "" yes "s/check (email = lower(btrim(email))/check (true/"
 
 echo "${count} negative controls, ${failures} not caught"
 [ "$failures" -eq 0 ]
