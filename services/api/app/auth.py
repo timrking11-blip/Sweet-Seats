@@ -24,7 +24,7 @@ import math
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 SECRET_ENV = "SWEET_SEATS_SUPABASE_JWT_SECRET"
@@ -58,6 +58,9 @@ class AuthConfig:
 @dataclass(frozen=True)
 class Identity:
     user_id: UUID
+    # When the user last proved who they are (signed in or re-authenticated), from the
+    # token's amr timestamps or auth_time; None when the token does not say.
+    authenticated_at: datetime | None = None
 
 
 def configured() -> AuthConfig:
@@ -103,6 +106,25 @@ def _number(claims: dict, name: str, *, required: bool = False) -> float | None:
     return number
 
 
+def _authenticated_at(claims: dict, at: float) -> datetime | None:
+    """The newest authentication time the token states: Supabase's amr list of
+    {method, timestamp}, else auth_time. A malformed or future time rejects the token."""
+    amr = claims.get("amr")
+    if amr is not None:
+        if not isinstance(amr, list) or len(amr) > 16:
+            raise AuthError("invalid_amr")
+        if not all(isinstance(entry, dict) for entry in amr):
+            raise AuthError("invalid_amr")
+        latest = max((_number(entry, "timestamp", required=True) for entry in amr), default=None)
+    else:
+        latest = _number(claims, "auth_time")
+    if latest is None:
+        return None
+    if latest > at + LEEWAY.total_seconds() or latest < 0:
+        raise AuthError("invalid_amr")
+    return datetime.fromtimestamp(latest, UTC)
+
+
 def verify(token: str, config: AuthConfig, now: datetime) -> Identity:
     """The verified identity in token at now, or AuthError."""
     if len(token.encode()) > MAX_TOKEN_BYTES or token.count(".") != 2:
@@ -143,7 +165,11 @@ def verify(token: str, config: AuthConfig, now: datetime) -> Identity:
         user_id = None
     if user_id is None or str(user_id) != subject:
         raise AuthError("invalid_subject")
-    return Identity(user_id)
+    try:
+        authenticated_at = _authenticated_at(claims, at)
+    except AuthError as exc:
+        raise AuthError("invalid_amr") from exc
+    return Identity(user_id, authenticated_at)
 
 
 def bearer(authorization: str | None) -> str:

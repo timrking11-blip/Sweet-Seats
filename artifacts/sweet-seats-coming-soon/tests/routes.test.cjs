@@ -51,14 +51,31 @@ test('/ renders the coming-soon landing page', () => {
   assert.match(html, /href="\/"[^>]*>Explore the discovery demo/);
   assert.match(html, /class="ss-button ss-button--primary/);
   assert.match(html, /class="ss-link/);
-  assert.match(html, /No connected waitlist/);
+  assert.doesNotMatch(html, /No connected waitlist/);
   assert.match(html, /Checking the film preview/);
   assert.match(fs.readFileSync(path.resolve(__dirname, '../src/pages/home.tsx'), 'utf8'), /preload="none"/);
   assert.match(fs.readFileSync(path.resolve(__dirname, '../src/pages/home.tsx'), 'utf8'), /sweet-seats-final-cut-v3\.mp4/);
   assert.match(html, /sweet-seats-final-cut-v3-poster\.jpg/);
   assert.match(html, /27-second film/);
   assert.doesNotMatch(fs.readFileSync(path.resolve(__dirname, '../src/pages/home.tsx'), 'utf8'), /\bautoPlay\b/);
-  assert.doesNotMatch(html, /<form|<input|Join the waitlist/);
+  // The waitlist renders before the server's consent copy arrives, with nothing to tick yet.
+  assert.match(html, /<form[^>]*aria-labelledby=/);
+  assert.match(html, />Join the waitlist</);
+  assert.match(html, /<input type="email" required=""[^>]*name="email"/);
+  assert.match(html, /Loading the sign-up terms/);
+  assert.match(html, /<input type="checkbox" required="" disabled=""[^>]*name="consent"/);
+  assert.match(html, /<div aria-hidden="true"[^>]*><label>Website<input type="text" tabindex="-1"[^>]*name="website"/);
+  assert.match(html, /<button type="submit" disabled=""/);
+});
+
+test('waitlist attribution and artist parsing', () => {
+  const { sourceFromSearch, parseArtists } = load(path.resolve(__dirname, '../src/components/waitlist-form.tsx'));
+  assert.equal(sourceFromSearch('?src=Instagram'), 'instagram');
+  assert.equal(sourceFromSearch('?utm_source=newsletter'), 'newsletter');
+  assert.equal(sourceFromSearch('?src=a&utm_source=b'), 'a');
+  assert.equal(sourceFromSearch(''), '');
+  assert.deepEqual(parseArtists(' Synthetic  Band, synthetic band ,,Synthetic Band\nOther'), ['Synthetic Band', 'synthetic band', 'Other']);
+  assert.equal(parseArtists(Array.from({ length: 12 }, (_, i) => `A${i}`).join(',')).length, 10);
 });
 
 test('unknown routes render the original 404 with a base-aware home link', () => {

@@ -2,18 +2,25 @@
 
 NYC-area live music discovery and, once licensed comparable offer history supports it, personalized ticket buy/wait recommendations.
 
-## Current state — 2026-10-29
+## Current state — 2026-11-17
 
-`main` (`e55f6e0`) holds the fixture-backed discovery feed and API, transactional local
-PostgreSQL persistence, deny-by-default source permissions with RLS and negative
-controls, the MusicBrainz identity resolver with its collection-run ledger, disabled
-Ticketmaster and official-calendar adapters, and the Phase 2 durable jobs and alert
-outbox with fenced claims and delivery intent (PR #27). Branch
-`feat/phase2-auth-closure` adds send-time trigger and follow re-checks, server-written
-consent evidence, and Supabase-token-verified user workflows
-([user API](docs/contracts/user-api-v0.1.md)); it is under review, not merged.
+`main` holds the fixture-backed discovery feed and API, transactional PostgreSQL
+persistence, deny-by-default source permissions with RLS and negative controls, the
+MusicBrainz identity resolver with its collection-run ledger, disabled Ticketmaster and
+official-calendar adapters, the Phase 2 durable jobs and alert outbox, send-time trigger,
+follow and consent re-checks, and Supabase-token-verified user workflows
+([user API](docs/contracts/user-api-v0.1.md)).
+
+The workspace was migrated to pnpm on Replit on 2 Nov 2026: the active web app is the Vite
+app in `artifacts/sweet-seats`, `artifacts/api-server` (Express) proxies to the preserved
+FastAPI service in `services/api`, and `replit.md` describes running it. References to
+`apps/web`, Next.js or Vercel in older documents describe the pre-migration stack. CI runs
+from `.github/workflows/verify.yml`, including every database test against a disposable
+PostgreSQL and the negative controls.
 
 **Nothing is deployed, no provider is activated and no notification reaches a person.**
+The four Replit "Published your App" commits of 2 Nov may have exposed the synthetic
+preview publicly; the owner should confirm what is reachable and unpublish or label it.
 No phase has a fully evidenced exit: Phase 0 documentation is complete with owner
 choices open, and Phase 2 is blocked on environments, secrets, scheduling, monitoring
 and a restore exercise. See the

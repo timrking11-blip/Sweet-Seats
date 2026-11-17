@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, HttpUrl
 from .discovery import DiscoveryError
 from .discovery_postgres import DiscoveryStore, configured_store
 from .me import router as me_router
+from .waitlist import router as waitlist_router
+from .webhooks import router as webhooks_router
 
 app = FastAPI(
     title="Sweet Seats API",
@@ -26,7 +28,9 @@ async def discovery_cache_policy(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
     # Signed-in responses are per user and must never be shared by a cache either.
-    if path in {"/v1/events", "/v1/me"} or path.startswith(("/v1/events/", "/v1/me/")):
+    if path in {"/v1/events", "/v1/me", "/v1/waitlist"} or path.startswith(
+        ("/v1/events/", "/v1/me/", "/v1/waitlist/")
+    ):
         response.headers["Cache-Control"] = "private, no-store, max-age=0"
         response.headers["CDN-Cache-Control"] = "no-store"
         response.headers["Pragma"] = "no-cache"
@@ -115,3 +119,5 @@ def event_detail(event_id: UUID, store: DiscoveryStore = Depends(discovery_store
 
 
 app.include_router(me_router)
+app.include_router(waitlist_router)
+app.include_router(webhooks_router)

@@ -1,5 +1,6 @@
 import { brandNavigation } from "../../../../lib/sweet-seats-brand/foundation";
 import { useEffect, useState } from "react";
+import WaitlistForm from "../components/waitlist-form";
 
 const GH = "https://github.com/timrking11-blip";
 const BASE = import.meta.env.BASE_URL;
@@ -118,7 +119,10 @@ export default function Index() {
               >
                 Explore the discovery demo →
               </a>
-              <p className="text-sm text-soft">Synthetic demo available now. No connected waitlist.</p>
+              <p className="text-sm text-soft">Synthetic demo available now.</p>
+            </div>
+            <div className="mt-10">
+              <WaitlistForm />
             </div>
           </div>
           <Trailer />

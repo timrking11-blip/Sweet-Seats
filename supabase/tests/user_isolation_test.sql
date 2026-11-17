@@ -15,6 +15,10 @@ declare
   alert_b uuid;
 begin
   insert into auth.users (id) values (user_a), (user_b);
+  -- Outcome consent is accepted only under registered copies (20261118100000).
+  insert into public.consent_copies (kind, version, copy_sha256) values
+    ('outcomes', 'o1', repeat('1', 64)), ('outcomes', 'o2', repeat('2', 64)),
+    ('outcomes', 'o3', repeat('3', 64));
   insert into public.user_profiles (user_id, consent_version) values (user_a, 'c1'), (user_b, 'c1');
   insert into public.artists (canonical_name) values ('Isolation Test Artist') returning artist_id into artist;
   insert into public.artist_follows (user_id, artist_id) values (user_a, artist), (user_b, artist);
@@ -215,9 +219,15 @@ begin
       ('outcome_events', 'alert_id'), ('outcome_events', 'event_id'), ('outcome_events', 'kind'),
       ('outcome_events', 'occurred_at'), ('outcome_events', 'recorded_at'),
       ('outcome_events', 'confirmation_method'), ('outcome_events', 'paid_total_minor'),
-      ('outcome_events', 'currency'))
+      ('outcome_events', 'currency'),
+      ('consent_events', 'consent_event_id'), ('consent_events', 'user_id'),
+      ('consent_events', 'kind'), ('consent_events', 'action'),
+      ('consent_events', 'copy_version'), ('consent_events', 'copy_sha256'),
+      ('consent_events', 'subscription_id'), ('consent_events', 'source'),
+      ('consent_events', 'created_at'))
     and table_name in ('user_profiles', 'artist_follows', 'notification_subscriptions',
-                       'alerts', 'delivery_attempts', 'alert_deliveries', 'outcome_events');
+                       'alerts', 'delivery_attempts', 'alert_deliveries', 'outcome_events',
+                       'consent_events');
   if unexpected is not null then
     raise exception 'FAIL user tables have unreviewed columns: %', unexpected;
   end if;
