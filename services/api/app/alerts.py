@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -770,11 +769,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run one local alert worker tick.")
     parser.add_argument("--once", action="store_true", required=True)
     parser.parse_args()
-    from .discovery_postgres import PostgresStore
+    from .discovery_postgres import PostgresStore, configured_dsn
 
-    dsn = os.environ.get("SWEET_SEATS_LOCAL_DATABASE_URL")
+    dsn = configured_dsn()
     if not dsn:
-        parser.exit(1, "SWEET_SEATS_LOCAL_DATABASE_URL is required; no hosted database is used.\n")
+        parser.exit(1, "SWEET_SEATS_DATABASE_URL is required; the worker has no fixture fallback.\n")
     result = tick(PostgresStore(dsn), LogTransport(), datetime.now(UTC), "local-" + uuid4().hex[:8],
                   clock=lambda: datetime.now(UTC))
     print(json.dumps(result, default=str))

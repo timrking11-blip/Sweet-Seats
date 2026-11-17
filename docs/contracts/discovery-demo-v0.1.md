@@ -6,7 +6,7 @@ Traces to SS-DATA-0.1 and SS-ADR-002/003/004. Research remains isolated under SS
 
 The existing Next.js/TypeScript app calls the existing Python/FastAPI service.
 The local adapter uses `psycopg[binary]==3.2.13` and PostgreSQL 16.
-`SWEET_SEATS_LOCAL_DATABASE_URL` selects it explicitly; only loopback hosts are accepted.
+`SWEET_SEATS_DATABASE_URL` (or the older `SWEET_SEATS_LOCAL_DATABASE_URL`) selects it explicitly. Loopback hosts are always accepted; a Supabase host only with `SWEET_SEATS_ALLOW_HOSTED_DATABASE=true` and TLS (see the README's Hosted database section).
 There is no schema creation/migration on application startup. Configured database
 failures produce 503, never fallback. Without the variable, `.local/discovery.json`
 remains a legacy demo adapter. `ingest()` and `project_feed()` are shared storage-independent

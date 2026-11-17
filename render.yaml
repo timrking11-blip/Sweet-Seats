@@ -3,20 +3,21 @@
 # Nothing here is live. The owner creates the Render services from this file and fills
 # every sync: false value in the Render dashboard; no secret is ever committed.
 #
-# Before this can serve real data, two deliberate changes are needed (owner decisions):
-#   1. The API's store accepts only a loopback database URL (local_dsn in
-#      services/api/app/discovery_postgres.py) so it can never quietly reach a hosted
-#      project. Pointing it at Supabase means lifting that guard on purpose, with tests.
-#   2. The alert worker sends through LogTransport, which contacts no one.
-#      PostmarkTransport (services/api/app/transports/postmark.py) also needs the
-#      endpoint secret store, which is still undecided.
-# Until then the API runs on the synthetic demo data, as on Replit.
+# Database: the API and worker use Supabase only because SWEET_SEATS_ALLOW_HOSTED_DATABASE
+# is "true" below. The URL must be a Supabase host and TLS is enforced
+# (services/api/app/discovery_postgres.py). Use the transaction pooler URL (port 6543).
+#
+# Still needed before alerts reach a person: the alert worker sends through LogTransport,
+# which contacts no one. PostmarkTransport (services/api/app/transports/postmark.py) also
+# needs the endpoint secret store, which is still undecided.
 
 envVarGroups:
   - name: sweet-seats-secrets
     envVars:
-      - key: SWEET_SEATS_LOCAL_DATABASE_URL       # Supabase pooled URL (see note 1)
+      - key: SWEET_SEATS_DATABASE_URL             # Supabase transaction pooler URL
         sync: false
+      - key: SWEET_SEATS_ALLOW_HOSTED_DATABASE    # the explicit hosted-database opt-in
+        value: "true"
       - key: SWEET_SEATS_SUPABASE_JWT_SECRET
         sync: false
       - key: SWEET_SEATS_SUPABASE_ISSUER          # https://<project>.supabase.co/auth/v1
