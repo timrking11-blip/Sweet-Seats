@@ -20,7 +20,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Header, HTTPException
 
 from .discovery import DiscoveryError
-from .discovery_postgres import PostgresStore
+from .discovery_postgres import PostgresStore, configured_dsn
 from .transports.postmark import METADATA_KEY
 
 router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
@@ -33,7 +33,7 @@ ACK = {"status": "ok"}
 
 
 def webhook_store() -> PostgresStore:
-    dsn = os.environ.get("SWEET_SEATS_LOCAL_DATABASE_URL")
+    dsn = configured_dsn()
     try:
         if not dsn:
             raise DiscoveryError("store_unavailable")

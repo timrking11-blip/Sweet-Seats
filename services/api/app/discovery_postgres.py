@@ -1,4 +1,10 @@
-"""Transactional local synthetic persistence; no migrations or network providers at startup."""
+"""Transactional PostgreSQL persistence; no migrations or network providers at startup.
+
+The database URL comes from SWEET_SEATS_DATABASE_URL (or the older name
+SWEET_SEATS_LOCAL_DATABASE_URL). A loopback database is always accepted. A hosted one
+never is by accident: it needs SWEET_SEATS_ALLOW_HOSTED_DATABASE=true, a Supabase host,
+TLS, and no PGHOSTADDR or PGSERVICE in the environment that could redirect it.
+"""
 
 from __future__ import annotations
 
@@ -30,35 +36,73 @@ class DiscoveryStore(Protocol):
     def feed(self, now: datetime) -> dict: ...
 
 
-def local_dsn(dsn: str) -> str:
-    """This increment is local only; never silently connect to a hosted project."""
+DATABASE_URL_ENV = "SWEET_SEATS_DATABASE_URL"
+LEGACY_URL_ENV = "SWEET_SEATS_LOCAL_DATABASE_URL"
+ALLOW_HOSTED_ENV = "SWEET_SEATS_ALLOW_HOSTED_DATABASE"
+LOOPBACK = {"localhost", "127.0.0.1", "::1"}
+# Supabase direct (db.<ref>.supabase.co) and pooler (<region>.pooler.supabase.com) hosts.
+SUPABASE_SUFFIXES = (".supabase.co", ".supabase.com")
+TLS_MODES = {"require", "verify-ca", "verify-full"}
+# libpq settings that could send a hosted connection somewhere other than the URL says.
+REDIRECTING_ENV = ("PGHOSTADDR", "PGSERVICE", "PGSERVICEFILE")
+
+
+def configured_dsn() -> str | None:
+    return os.environ.get(DATABASE_URL_ENV) or os.environ.get(LEGACY_URL_ENV) or None
+
+
+def hosted_allowed() -> bool:
+    return os.environ.get(ALLOW_HOSTED_ENV) == "true"
+
+
+def checked_dsn(dsn: str) -> tuple[str, bool]:
+    """(dsn, hosted) when the URL is acceptable, else DiscoveryError. Errors never
+    contain the URL, which carries the password."""
     try:
         options = conninfo_to_dict(dsn)
-        if options.get("host") not in {"localhost", "127.0.0.1", "::1"}:
-            raise ValueError
-        if options.get("hostaddr") or options.get("service"):
-            raise ValueError
-    except (psycopg.Error, ValueError):
+    except psycopg.Error:
         raise DiscoveryError("local_database_required") from None
-    return dsn
+    host = options.get("host") or ""
+    if options.get("hostaddr") or options.get("service") or "," in host:
+        raise DiscoveryError("local_database_required")
+    if host in LOOPBACK:
+        return dsn, False
+    if not hosted_allowed():
+        raise DiscoveryError("local_database_required")
+    if not host.lower().endswith(SUPABASE_SUFFIXES):
+        raise DiscoveryError("hosted_database_not_supabase")
+    if options.get("sslmode", "require") not in TLS_MODES:
+        raise DiscoveryError("database_tls_required")
+    return dsn, True
 
 
 def configured_store() -> DiscoveryStore:
-    dsn = os.environ.get("SWEET_SEATS_LOCAL_DATABASE_URL")
+    dsn = configured_dsn()
     return PostgresStore(dsn) if dsn else FixtureStore()
 
 
 class PostgresStore:
     def __init__(self, dsn: str):
-        self.dsn = local_dsn(dsn)
+        self.dsn, self.hosted = checked_dsn(dsn)
 
     def _connect(self):
-        # Explicit hostaddr prevents an inherited PGHOSTADDR from redirecting a
-        # loopback DSN to a hosted database.
-        host = conninfo_to_dict(self.dsn)["host"]
+        if not self.hosted:
+            # Explicit hostaddr prevents an inherited PGHOSTADDR from redirecting a
+            # loopback DSN to a hosted database.
+            host = conninfo_to_dict(self.dsn)["host"]
+            return psycopg.connect(
+                self.dsn, hostaddr="::1" if host == "::1" else "127.0.0.1",
+                row_factory=dict_row, connect_timeout=3,
+            )
+        if not hosted_allowed() or any(os.environ.get(name) for name in REDIRECTING_ENV):
+            raise DiscoveryError("store_unavailable")
         return psycopg.connect(
-            self.dsn, hostaddr="::1" if host == "::1" else "127.0.0.1",
-            row_factory=dict_row, connect_timeout=3,
+            self.dsn,
+            # TLS unless the URL asks for stronger verification.
+            sslmode=conninfo_to_dict(self.dsn).get("sslmode", "require"),
+            # Supabase's transaction pooler cannot hold server-side prepared statements.
+            prepare_threshold=None,
+            row_factory=dict_row, connect_timeout=10,
         )
 
     def read(self) -> dict:

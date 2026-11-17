@@ -4,26 +4,37 @@ NYC-area live music discovery and, once licensed comparable offer history suppor
 
 ## Current state — 2026-11-17
 
-`main` holds the fixture-backed discovery feed and API, transactional PostgreSQL
-persistence, deny-by-default source permissions with RLS and negative controls, the
-MusicBrainz identity resolver with its collection-run ledger, disabled Ticketmaster and
-official-calendar adapters, the Phase 2 durable jobs and alert outbox, send-time trigger,
-follow and consent re-checks, and Supabase-token-verified user workflows
-([user API](docs/contracts/user-api-v0.1.md)).
+`main` holds:
+- **Discovery and sources:**
+  - the fixture-backed discovery feed and API;
+  - transactional PostgreSQL persistence;
+  - deny-by-default source permissions, with RLS and negative controls;
+  - the MusicBrainz identity resolver and its collection-run ledger;
+  - disabled Ticketmaster and official-calendar adapters.
+- **Alerts and accounts:**
+  - durable jobs and the alert outbox, with send-time trigger, follow and consent re-checks;
+  - Supabase-token-verified user workflows ([user API](docs/contracts/user-api-v0.1.md)).
+- **Pilot foundation (PR #31):**
+  - CI on every pull request, running every database test against a disposable PostgreSQL plus 46 negative controls;
+  - the coming-soon waitlist with consent evidence and source attribution;
+  - an append-only consent history tied to the exact copy shown;
+  - a recent sign-in required before a deletion request;
+  - the Postmark email transport and its bounce/complaint webhook;
+  - a draft Render blueprint, a migration runner and a restore runbook.
 
-The workspace was migrated to pnpm on Replit on 2 Nov 2026: the active web app is the Vite
-app in `artifacts/sweet-seats`, `artifacts/api-server` (Express) proxies to the preserved
-FastAPI service in `services/api`, and `replit.md` describes running it. References to
-`apps/web`, Next.js or Vercel in older documents describe the pre-migration stack. CI runs
-from `.github/workflows/verify.yml`, including every database test against a disposable
-PostgreSQL and the negative controls.
+**The stack.** It runs as a pnpm workspace, migrated on Replit on 2 Nov 2026:
+- the Vite app in `artifacts/sweet-seats`;
+- the coming-soon page in `artifacts/sweet-seats-coming-soon`;
+- `artifacts/api-server` (Express), which proxies `/api` to the FastAPI service in `services/api`.
+
+`replit.md` describes running it. References to `apps/web`, Next.js or Vercel in older documents describe the pre-migration stack.
 
 **Nothing is deployed, no provider is activated and no notification reaches a person.**
-The four Replit "Published your App" commits of 2 Nov may have exposed the synthetic
-preview publicly; the owner should confirm what is reachable and unpublish or label it.
-No phase has a fully evidenced exit: Phase 0 documentation is complete with owner
-choices open, and Phase 2 is blocked on environments, secrets, scheduling, monitoring
-and a restore exercise. See the
+- **Database:** the API can now use a hosted Supabase database, but only when it is explicitly opted in. See [Hosted database (Supabase)](#hosted-database-supabase).
+- **Alerts:** the alert worker still sends through a logging transport.
+- **Replit publishes:** the four "Published your App" commits of 2 Nov may have exposed the synthetic preview publicly. The owner should confirm what is reachable and unpublish or label it.
+
+For phase status and open gaps see the
 [phase assessment and gap register](docs/phase-assessment.md),
 [MetaBrainz readiness](docs/metabrainz-readiness.md),
 [asset inventory](docs/asset-inventory.md) and
@@ -65,9 +76,13 @@ Predictive advice is a later gated release. Do not claim unannounced event acces
 
 Use internal UUIDs with typed vendor mappings. The SS-DATA-0.1 entity dictionary contains 29 initial entities; it is documentation, not deployed SQL.
 
-## Proposed technology
+## Technology
 
-Next.js/TypeScript PWA; Vercel frontend hosting; Python FastAPI and workers on Render; Supabase PostgreSQL/Auth; Cloudflare R2 private S3-compatible storage when its permission gate opens.
+- **Web:** Vite/React web apps served as static sites.
+- **API:** an Express front for `/api`, with the Python FastAPI API and the alert worker beside it, on Render (`render.yaml`, a draft).
+- **Database and sign-in:** Supabase PostgreSQL and Auth.
+- **Alert email:** Postmark.
+- **Storage:** Cloudflare R2 private S3-compatible storage, when its permission gate opens.
 
 These are recommendations, not provisioned resources. A 2026-10-10 planning illustration put the low-volume base at about $41/month before licensed data, training overages, storage/notifications/domain and extra environments; it is not a current forecast. Use the workload model in the [phase assessment](docs/phase-assessment.md#economics-and-pilot-proposed-thresholds-none-approved) and recheck provider pricing before provisioning.
 
@@ -108,17 +123,41 @@ Candidate thresholds (15% and $25 total-order change in 60 minutes) require back
 | 7 | Operational phone PWA, reliable alerts and monitoring |
 | 8 | Evidence-led native/provider/vertical expansion |
 
-## Next iteration
+## Build scope: the Sweet Seats pilot
 
-The selected stack is Next.js/TypeScript PWA on Vercel, Supabase PostgreSQL/Auth, Render API/workers, and Cloudflare R2 when its storage gate opens. Review the local PostgreSQL amendment and validation evidence, including transactional replay/recovery, before connecting production storage. Confirm the first artist/venue sample, NYC catchment and notification channel. Provider activation and runtime provisioning remain separate owner approvals.
+The current scope comes from the 16 Nov 2026 diagnostic. It is a pilot: about 10 invited users get source-backed alerts for a fixed panel of about 25 artists and 10 NYC venues. The work is ordered so the parts only Sweet Seats owns are built first and measured from day one:
+- provenance on every event and alert;
+- a first-seen lead-time dataset per source;
+- an append-only, provable consent record;
+- an owned waitlist with attribution.
 
-Current product layout: `apps/web`, `services/api`, `supabase/migrations`, `tests/fixtures`, `jobs`, `adapters` and `docs`. Future delivery adds provider adapters, durable jobs, model evaluation and infrastructure manifests only as their gates open.
+Pricing advice (X2), mobile releases and design-system work are frozen until the pilot reports.
+
+| Step | What | Status |
+|---|---|---|
+| 0 | CI with PostgreSQL, dependency advisories, docs | Done (PR #31) |
+| 1 | Coming-soon waitlist with consent and `?src=` attribution | Done (PR #31) |
+| 2 | Supabase and Render environment, migration runner, restore drill (G-11) | **Code done:** the hosted-database opt-in, a draft `render.yaml`, `scripts/apply-migrations.{sh,ps1}`. Accounts and the drill are the owner's |
+| 3 | Sign-in screens; recent sign-in before deletion (G-16); JWT key type (G-05a) | The API check is done; screens and sign-out revocation are next |
+| 4 | Consent-strict email alerts: consent history (G-15), Postmark, webhooks, account screens, purge (G-06) | History, transport and webhooks are done. Next are the screens, the endpoint store and the purge, plus a real email on staging |
+| 5 | First live source (Ticketmaster), lineage and purge (G-08), shared rate budgets (G-10) | Waits on the terms review, the panel and lifting the `.invalid` URL guard (G-09) |
+| 6 | Official-calendar lead-time dataset: an append-only `first_seen` and a weekly `pilot_metrics` | Waits on the venue calendar list |
+| 7 | Invite 10 pilot users from the waitlist | After Steps 2–6 |
 
 Reference Notion decision IDs in pull requests. Keep credentials, private user records, licensed payloads and trained artifacts out of Git. Publish no open-source license until the owner decides.
 
 ## Open decisions
 
-Budget; precise catchment and first sample; PWA confirmation; notification vendor/channel; detailed-offer source and contract; audience vendor; retention durations; evaluation/promotion thresholds; price-alert thresholds; accounts and restoration targets.
+These decisions belong to the owner:
+- **Supabase and Render accounts**, plus the restore target and RPO/RTO.
+- **Postmark:** an account and a sending domain (DKIM/SPF).
+- **Endpoint store:** where alert email addresses are kept.
+- **Consent and retention:** the consent wording and the purge and retention periods, with counsel.
+- **Sign-in keys:** the JWT signing key type (G-05a).
+- **First live source:** the Ticketmaster and MusicBrainz terms, the artist and venue panel, and the monthly budget cap.
+- **Official calendars:** the venue calendar list.
+- **Before public brand spend:** trademark clearance.
+- **Later releases:** the detailed-offer source and contract, the audience vendor, evaluation and promotion thresholds, and price-alert thresholds.
 
 
 ## Internal research amendment — SS-ADR-007
@@ -137,61 +176,74 @@ See [architecture reconciliation](docs/linear-research-agent.md) for verified br
 ## Local PostgreSQL discovery
 
 Use a dedicated disposable PostgreSQL 16 database. The application never creates a
-schema on startup and accepts only an explicit loopback database host. For example:
+schema on startup. A loopback database URL is always accepted; a hosted one only as
+described below. For example:
 
 ```bash
 docker run --name sweet-seats-local -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=sweet_seats -p 127.0.0.1:5432:5432 -d postgres:16
-export SWEET_SEATS_LOCAL_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/sweet_seats
-python -m pip install --require-hashes -r services/api/requirements-dev.lock
-python -m pip install --no-deps -e ./services/api
-# Run once in this NEW database, in filename order. Never target a shared/hosted DB.
+export SWEET_SEATS_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/sweet_seats
+uv sync --frozen
 # The two emulation scripts stand in for Supabase's API roles and Auth (auth.uid()).
-psql "$SWEET_SEATS_LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/ci/emulate_supabase_roles.sql
-psql "$SWEET_SEATS_LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/ci/emulate_supabase_auth.sql
-for f in supabase/migrations/*.sql; do
-  psql "$SWEET_SEATS_LOCAL_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f" || break
-done
-python -m services.api.app.discovery
-python -m uvicorn app.main:app --app-dir services/api --host 127.0.0.1 --port 8000
-# Separate terminal, after exporting SWEET_SEATS_API_ORIGIN=http://127.0.0.1:8000:
-cd apps/web
-npm ci
-npm run dev
+psql "$SWEET_SEATS_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/ci/emulate_supabase_roles.sql
+psql "$SWEET_SEATS_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/ci/emulate_supabase_auth.sql
+SWEET_SEATS_MIGRATION_URL="$SWEET_SEATS_DATABASE_URL" scripts/apply-migrations.sh
+uv run --frozen python -m services.api.app.discovery
+pnpm install --frozen-lockfile
+PORT=8080 pnpm --filter @workspace/api-server run dev   # API on :8080; see replit.md
 ```
 
-Open `http://localhost:3000`. The CLI prints source/logical-key replay digests,
-collection outcomes and canonical/observation counts. Re-running the same fixture
-preserves IDs/counts. If PostgreSQL is configured but unavailable, the API returns
-503; it never silently serves the JSON store. Without the variable, the legacy
-single-writer `.local/discovery.json` demo remains available. `--store PATH` explicitly
-selects that legacy adapter. Existing JSON data is not automatically imported.
+The CLI prints source/logical-key replay digests, collection outcomes and
+canonical/observation counts. Re-running the same fixture preserves IDs and counts. If
+PostgreSQL is configured but unavailable, the API returns 503; it never silently serves
+the JSON store. Without a database URL, the legacy single-writer `.local/discovery.json`
+demo remains available. `SWEET_SEATS_LOCAL_DATABASE_URL`, the older name, is still read
+when `SWEET_SEATS_DATABASE_URL` is unset.
 
-Database acceptance uses a local administrative account able to create/drop throwaway
-test databases. Never use a hosted/shared database. Tests apply all migrations only
-inside uniquely named test databases and drop those databases afterward:
+### Hosted database (Supabase)
+
+The API and the alert worker connect to a hosted database only when all of these hold.
+Otherwise they refuse, and the error never includes the URL.
+- `SWEET_SEATS_ALLOW_HOSTED_DATABASE=true` is set. It must be exactly `true`, and is checked again on every connection.
+- The host is a Supabase host: `db.<ref>.supabase.co`, or the pooler at `*.pooler.supabase.com`.
+- The connection uses TLS. `sslmode` defaults to `require`; `verify-full` is better where the CA is installed.
+- Neither the URL nor the environment carries `hostaddr`, `PGHOSTADDR`, `PGSERVICE` or `PGSERVICEFILE`, any of which could redirect it.
+
+Server-side prepared statements are off, so Supabase's transaction pooler (port 6543)
+works.
+
+The API's signed-in routes switch to the `authenticated` role. The database user must be
+allowed to do that. Supabase's `postgres` user is, but check it on staging first.
+
+Apply migrations to a Supabase project with `scripts/apply-migrations.sh`, or with
+`scripts/apply-migrations.ps1` on Windows. Do not run the emulation scripts there:
+Supabase provides those roles and Auth itself. Keep every database URL server-side and
+out of Git.
+
+### Database tests
+
+Database acceptance uses a local administrative account able to create and drop
+throwaway test databases. Never point tests at a hosted or shared database. Tests apply
+all migrations only inside uniquely named test databases and drop them afterward:
 
 ```bash
 export SWEET_SEATS_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/postgres
-python -m pytest services/api/tests -q
-python -m unittest discover -s tests -v
+export PGPASSWORD=postgres
+uv run --frozen python -m pytest services/api/tests tests -q
 ```
 
-The CI PostgreSQL 16 job also exercises Supabase-style default grants, RLS denial,
-source-permission boundaries and deliberately broken negative controls. PostgreSQL
-integration tests skip explicitly when the test URL is absent; that is not a database
-validation pass. Keep both database URLs server-side.
+CI's PostgreSQL 16 job also exercises:
+- Supabase-style default grants;
+- RLS denial and source-permission boundaries;
+- consent history;
+- the deliberately broken negative controls.
+
+It fails if any database test skips.
 
 ## Dependency verification
 
-CI installs the hashed Python 3.12 runtime/development dependency graph from
+CI installs the hashed Python 3.12 runtime and development dependency graph from
 `services/api/requirements-dev.lock`; production-only installs use
-`services/api/requirements-runtime.lock`. Install the local API with `--no-deps -e`
-after the lock. Use `npm ci` for the web lock. Both full npm audits (including dev)
-and the Python dev/runtime audit block CI on any reported advisory; there are no
-advisory ignore lists or report-only audit steps.
-
-The pinned Next ESLint package's directory-only glob call uses a small private
-compatibility adapter backed by `tinyglobby`, replacing the unpatched `braces` chain.
-Next, React and the Next lint rules retain their versions. See
-[dependency and API gap audit](docs/API-dependency-audit.md) for the exact scope,
-compatibility evidence, review findings and remaining integration work.
+`services/api/requirements-runtime.lock`. Both Python locks are audited with pip-audit,
+and the pnpm workspace is installed with `--frozen-lockfile` and audited with
+`pnpm audit --prod`. Any reported advisory blocks CI. Development-only npm advisories
+are not yet gated; see [dependency and API gap audit](docs/API-dependency-audit.md).

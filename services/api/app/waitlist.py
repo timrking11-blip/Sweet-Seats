@@ -9,7 +9,6 @@ Rate limiting here is per process; a shared limit waits for the provisioned envi
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 import threading
 import time
@@ -20,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .discovery import DiscoveryError
-from .discovery_postgres import PostgresStore
+from .discovery_postgres import PostgresStore, configured_dsn
 
 router = APIRouter(prefix="/v1/waitlist", tags=["waitlist"])
 
@@ -108,7 +107,7 @@ def client_key(request: Request) -> str:
 
 
 def waitlist_store() -> PostgresStore:
-    dsn = os.environ.get("SWEET_SEATS_LOCAL_DATABASE_URL")
+    dsn = configured_dsn()
     try:
         if not dsn:
             raise DiscoveryError("store_unavailable")

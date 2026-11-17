@@ -15,7 +15,6 @@ waits for the retention decision.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -30,7 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from . import consent
 from .auth import AuthError, AuthUnavailable, Identity, bearer, configured, verify
 from .discovery import DiscoveryError
-from .discovery_postgres import PostgresStore
+from .discovery_postgres import PostgresStore, configured_dsn
 
 router = APIRouter(prefix="/v1/me", tags=["me"])
 
@@ -47,7 +46,7 @@ def auth_now() -> datetime:
 
 
 def user_store() -> PostgresStore:
-    dsn = os.environ.get("SWEET_SEATS_LOCAL_DATABASE_URL")
+    dsn = configured_dsn()
     try:
         if not dsn:
             raise DiscoveryError("store_unavailable")
