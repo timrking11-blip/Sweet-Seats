@@ -9,6 +9,7 @@ from .discovery import DiscoveryError
 from .discovery_postgres import DiscoveryStore, configured_store
 from .me import router as me_router
 from .waitlist import router as waitlist_router
+from .webhooks import router as webhooks_router
 
 app = FastAPI(
     title="Sweet Seats API",
@@ -119,3 +120,4 @@ def event_detail(event_id: UUID, store: DiscoveryStore = Depends(discovery_store
 
 app.include_router(me_router)
 app.include_router(waitlist_router)
+app.include_router(webhooks_router)

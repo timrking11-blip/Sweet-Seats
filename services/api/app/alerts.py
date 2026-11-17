@@ -224,7 +224,11 @@ def render(alert: dict, event: dict) -> dict:
     return {"template_version": alert["template_version"], "alert_id": str(alert["alert_id"]),
             "event_id": event["event_id"], "headline": lead[alert["trigger_type"]],
             "title": event["title"], "venue": event["venue"]["name"],
-            "local_date": event["local_date"], "starts_at": event["starts_at"]}
+            "local_date": event["local_date"], "starts_at": event["starts_at"],
+            # The "Where this came from" footer: read from the projection now, never stored.
+            "provenance": [{"name": s["name"], "url": s["source_url"], "observed_at": s["observed_at"]}
+                           for s in event.get("sources") or []],
+            "first_seen_at": event.get("first_seen_at"), "last_confirmed_at": event.get("observed_at")}
 
 
 def _backoff(attempts: int) -> timedelta:
