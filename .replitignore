@@ -5,5 +5,4 @@
 .local
 .pythonlibs
 __pycache__
-.migration-backup
 generated-artifacts

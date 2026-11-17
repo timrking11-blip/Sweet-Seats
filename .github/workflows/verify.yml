@@ -1,0 +1,105 @@
+name: Verify
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: API, database and negative controls
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Disposable CI container; never a Supabase project or shared database.
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --require-hashes -r services/api/requirements-dev.lock
+      - run: python -m pip install --no-deps -e ./services/api
+      - name: Python dependency audit (runtime and development locks)
+        run: |
+          python -m pip_audit -r services/api/requirements-runtime.lock --no-deps --disable-pip
+          python -m pip_audit -r services/api/requirements-dev.lock --no-deps --disable-pip
+      - run: ruff check services/api
+      - name: Emulate Supabase API roles and Auth
+        run: |
+          psql -v ON_ERROR_STOP=1 -q -f supabase/ci/emulate_supabase_roles.sql
+          psql -v ON_ERROR_STOP=1 -q -f supabase/ci/emulate_supabase_auth.sql
+      - name: Apply migrations
+        run: |
+          for f in $(ls supabase/migrations/*.sql | sort); do
+            echo "Applying $f"
+            psql -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+      - name: Permission and RLS tests
+        run: |
+          for f in supabase/tests/*.sql; do
+            echo "Running $f"
+            psql -v ON_ERROR_STOP=1 -q -f "$f"
+          done
+      - name: Python suite with PostgreSQL (no database test may skip)
+        env:
+          SWEET_SEATS_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+        run: |
+          python -m pytest services/api/tests tests -q -rs | tee pytest.log
+          # Only the built-bundle check may skip here; it runs in the web job.
+          if grep -E '^SKIPPED' pytest.log | grep -v 'test_frontend_boundary'; then
+            echo "Unexpected skipped tests above" >&2
+            exit 1
+          fi
+      - name: Negative controls (tests must catch deliberate breakage)
+        run: bash supabase/ci/negative_controls.sh
+
+  web:
+    name: Web workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Production dependency audit
+        run: pnpm audit --prod
+      - run: pnpm run typecheck
+      - run: pnpm --filter @workspace/sweet-seats test
+      - name: Build the web artifacts
+        env:
+          PORT: "3000"
+          BASE_PATH: /
+        run: >-
+          pnpm -r
+          --filter ./artifacts/sweet-seats
+          --filter ./artifacts/sweet-seats-coming-soon
+          --filter ./artifacts/api-server
+          run build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check built client secret boundary
+        run: python -m unittest tests.test_frontend_boundary -v

@@ -87,7 +87,10 @@ def test_persistence_parity_replay_restart_and_digest_report(pg_store, tmp_path)
     assert store.feed(NOW) == baseline.feed(NOW)
     assert store.seed(fixture, NOW + timedelta(hours=1)) == first
     # A fresh interpreter and fresh connections must recover exactly the same API projection.
-    env = dict(os.environ, SWEET_SEATS_LOCAL_DATABASE_URL=store.dsn)
+    # The service is not an installed package in the uv workspace, so the child needs it on its path.
+    service_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    pythonpath = os.pathsep.join(p for p in (service_dir, os.environ.get("PYTHONPATH")) if p)
+    env = dict(os.environ, SWEET_SEATS_LOCAL_DATABASE_URL=store.dsn, PYTHONPATH=pythonpath)
     result = subprocess.run(
         [
             sys.executable,

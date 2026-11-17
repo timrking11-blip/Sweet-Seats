@@ -21,7 +21,7 @@ NYC-area live music discovery with source provenance, migrated from the imported
 - `services/api`: preserved FastAPI application and Python domain logic. `replit_server.py` starts it and initializes the original synthetic fixture only if no JSON store exists and no database is configured.
 - `tests/fixtures/discovery/nyc.json`: original invented event data.
 - `supabase`, `db`, `jobs`, `adapters`, `docs`: preserved original migrations, backend logic and governance documents.
-- `.migration-backup`: original imported tree, retained for reference and excluded from publishing.
+- The original imported tree (formerly `.migration-backup/`) was removed on 17 Nov 2026; it remains in git history at commit `0a33867`. CI now lives in `.github/workflows/verify.yml`.
 
 ## Migration decisions and limits
 - Keep the Lovable coming-soon site separate from the discovery app.
