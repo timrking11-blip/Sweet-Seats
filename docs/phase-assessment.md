@@ -112,6 +112,14 @@ plus approved official calendars.
 | Purchases | `purchase_confirmed` only; a click is never a purchase | `outcome_events` |
 | Cost per useful alert | Collection + delivery + operating cost / alerts opened or clicked | Workload model below |
 
+Since 18 Nov 2026 the first seven measures are computed weekly from the database by
+`services/api/app/pilot_metrics.py` into the append-only `pilot_metrics` table (weeks run
+Monday to Monday, America/New_York). Lead time and coverage read `event_first_seen`, which
+keeps the earliest `available_at` per event and source and is never rewritten. The baseline
+is `sources.source_type = 'event_listing_api'` and the treatment is `'official_calendar'`.
+Missed alerts still need the manual sample audit, and cost per useful alert stays empty
+until cost inputs are recorded. The numbers carry no verdict: the thresholds are the owner's.
+
 **Workload model** (variables, not prices; verify current pricing before quoting any):
 collection calls = monitored units × collections per day × pages per collection ×
 (1 + bounded retry rate); delivery = alerts × subscriptions × (1 + retry rate).

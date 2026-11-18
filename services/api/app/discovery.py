@@ -509,6 +509,33 @@ def project_feed(state: dict, now: datetime) -> dict:
             "unresolved": sorted(unresolved, key=lambda r: r["source_record_id"])}
 
 
+def median(values: list[float]) -> float | None:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if not ordered:
+        return None
+    return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def summarize_first_seen(first_by_event: dict, names: dict) -> list[dict]:
+    """Per source: events it saw, events it saw first (ties count for each), and the
+    median minutes it trailed the earliest source on events more than one source saw.
+    first_by_event maps event id -> {source id: first available datetime}."""
+    totals = {}
+    for seen in first_by_event.values():
+        earliest = min(seen.values())
+        for source_id, available in seen.items():
+            row = totals.setdefault(source_id, {"events_seen": 0, "events_first": 0, "lags": []})
+            row["events_seen"] += 1
+            row["events_first"] += available == earliest
+            if len(seen) > 1:
+                row["lags"].append((available - earliest).total_seconds() / 60)
+    return [{"source_id": source_id, "name": names[source_id],
+             "events_seen": row["events_seen"], "events_first": row["events_first"],
+             "shared_events": len(row["lags"]), "median_lag_minutes": median(row["lags"])}
+            for source_id, row in sorted(totals.items())]
+
+
 def lead_time_report(state: dict, now: datetime) -> dict:
     """Which source makes each event knowable first (SS-DATA-0.1 available_at).
 
@@ -526,24 +553,8 @@ def lead_time_report(state: dict, now: datetime) -> dict:
         available = timestamp(record["available_at"])
         if record["source_id"] not in seen or available < seen[record["source_id"]]:
             seen[record["source_id"]] = available
-    totals = {}
-    for seen in first_by_event.values():
-        earliest = min(seen.values())
-        for source_id, available in seen.items():
-            row = totals.setdefault(source_id, {"events_seen": 0, "events_first": 0, "lags": []})
-            row["events_seen"] += 1
-            row["events_first"] += available == earliest  # Ties count as first for each.
-            if len(seen) > 1:
-                row["lags"].append((available - earliest).total_seconds() / 60)
-    sources = []
-    for source_id, row in sorted(totals.items()):
-        lags = sorted(row["lags"])
-        middle = len(lags) // 2
-        median = None if not lags else (
-            lags[middle] if len(lags) % 2 else (lags[middle - 1] + lags[middle]) / 2)
-        sources.append({"source_id": source_id, "name": state["sources"][source_id]["name"],
-                        "events_seen": row["events_seen"], "events_first": row["events_first"],
-                        "shared_events": len(lags), "median_lag_minutes": median})
+    names = {sid: source["name"] for sid, source in state["sources"].items()}
+    sources = summarize_first_seen(first_by_event, names)
     return {"basis": "available_at", "events": len(first_by_event), "sources": sources}
 
 

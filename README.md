@@ -141,7 +141,7 @@ Pricing advice (X2), mobile releases and design-system work are frozen until the
 | 3 | Sign-in screens; recent sign-in before deletion (G-16); JWT key type (G-05a) | The API check is done; screens and sign-out revocation are next |
 | 4 | Consent-strict email alerts: consent history (G-15), Postmark, webhooks, account screens, purge (G-06) | History, transport and webhooks are done. Next are the screens, the endpoint store and the purge, plus a real email on staging |
 | 5 | First live source (Ticketmaster), lineage and purge (G-08), shared rate budgets (G-10) | Waits on the terms review, the panel and lifting the `.invalid` URL guard (G-09) |
-| 6 | Official-calendar lead-time dataset: an append-only `first_seen` and a weekly `pilot_metrics` | Waits on the venue calendar list |
+| 6 | Official-calendar lead-time dataset: an append-only `first_seen` and a weekly `pilot_metrics` | **Code done:** `event_first_seen` (append-only, filled by a trigger on every stored observation), the weekly `pilot_metrics` job and cron, and the owner-only `GET /v1/admin/pilot`. Waits on the venue calendar list and a live baseline source |
 | 7 | Invite 10 pilot users from the waitlist | After Steps 2–6 |
 
 Reference Notion decision IDs in pull requests. Keep credentials, private user records, licensed payloads and trained artifacts out of Git. Publish no open-source license until the owner decides.

@@ -93,3 +93,16 @@ services:
       - key: PYTHON_VERSION
         value: "3.12"
       - fromGroup: sweet-seats-secrets
+
+  # Weekly pilot metrics (Step 6): every Monday 06:10 ET (11:10 UTC in winter), the week just
+  # ended is appended to pilot_metrics. Render schedules are UTC; a re-run is a no-op.
+  - type: cron
+    name: sweet-seats-pilot-metrics
+    runtime: python
+    schedule: "10 11 * * 1"
+    buildCommand: pip install uv && uv sync --frozen
+    startCommand: uv run --frozen python -m services.api.app.pilot_metrics
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - fromGroup: sweet-seats-secrets

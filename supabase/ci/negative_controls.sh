@@ -18,6 +18,7 @@ RLS_TEST=supabase/tests/rls_denial_test.sql
 MB_RUNS_TEST=supabase/tests/musicbrainz_collection_runs_test.sql
 WAITLIST_TEST=supabase/tests/waitlist_test.sql
 CONSENT_TEST=supabase/tests/consent_history_test.sql
+FIRST_SEEN_TEST=supabase/tests/first_seen_test.sql
 mapfile -t MIGRATIONS < <(ls supabase/migrations/*.sql | sort)
 
 failures=0
@@ -265,6 +266,23 @@ run_control "subscription consent not recorded" \
 run_control "a user's consent change recorded as the server's" \
   "FAIL user A sees the wrong consent history" "$CONSENT_TEST" \
   "" yes "s/when current_setting('role') in ('authenticated', 'anon') then 'user'/when false then 'user'/"
+
+# First-seen evidence and pilot metrics (Step 6).
+run_control "first-seen evidence can be rewritten" \
+  "FAIL first-seen evidence was rewritten" "$FIRST_SEEN_TEST" \
+  "drop trigger event_first_seen_append_only on public.event_first_seen;"
+
+run_control "first-seen evidence deletable without a rights purge" \
+  "FAIL first-seen evidence was deleted without a rights purge" "$FIRST_SEEN_TEST" \
+  "" yes "s/if tg_op = 'DELETE' and current_setting('sweet_seats.rights_purge', true) = 'on'/if tg_op = 'DELETE'/"
+
+run_control "pilot metrics can be edited" \
+  "FAIL a pilot metrics row was edited" "$FIRST_SEEN_TEST" \
+  "drop trigger pilot_metrics_append_only on public.pilot_metrics;"
+
+run_control "pilot metrics readable by anon" \
+  "FAIL anon can read first-seen evidence or pilot metrics" "$FIRST_SEEN_TEST" \
+  "grant select on public.pilot_metrics to anon;"
 
 echo "${count} negative controls, ${failures} not caught"
 [ "$failures" -eq 0 ]

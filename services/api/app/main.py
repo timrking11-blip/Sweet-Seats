@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field, HttpUrl
 
+from .admin import router as admin_router
 from .discovery import DiscoveryError
 from .discovery_postgres import DiscoveryStore, configured_store
 from .me import router as me_router
@@ -29,7 +30,7 @@ async def discovery_cache_policy(request: Request, call_next):
     path = request.url.path
     # Signed-in responses are per user and must never be shared by a cache either.
     if path in {"/v1/events", "/v1/me", "/v1/waitlist"} or path.startswith(
-        ("/v1/events/", "/v1/me/", "/v1/waitlist/")
+        ("/v1/events/", "/v1/me/", "/v1/waitlist/", "/v1/admin/")
     ):
         response.headers["Cache-Control"] = "private, no-store, max-age=0"
         response.headers["CDN-Cache-Control"] = "no-store"
@@ -119,5 +120,6 @@ def event_detail(event_id: UUID, store: DiscoveryStore = Depends(discovery_store
 
 
 app.include_router(me_router)
+app.include_router(admin_router)
 app.include_router(waitlist_router)
 app.include_router(webhooks_router)
